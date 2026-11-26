@@ -328,6 +328,9 @@ class Launch:
     cbufs: dict[int, bytes] = field(default_factory=dict)  # constant buffers by bank
     surfaces: dict[tuple[int, int], Surface] = field(default_factory=dict)  # by the handle's two numbers
     memory: Memory = field(default_factory=Memory)
+    # MUFU results to use instead of computing them, by (instruction address, input bits). A check
+    # against a GPU fills this from the GPU's own results, which are approximations.
+    mufu_results: dict[tuple[int, int], int] | None = None
 
 
 @dataclass
@@ -438,8 +441,12 @@ class Program:
         return out
 
 
-def run(program: Program, launch: Launch, *, step_limit: int = DEFAULT_STEP_LIMIT) -> Result:
-    """Run every workgroup of the grid. Changes the launch's surfaces and memory in place."""
+def run(program: Program, launch: Launch, *, step_limit: int = DEFAULT_STEP_LIMIT, reverse: bool = False) -> Result:
+    """Run every workgroup of the grid. Changes the launch's surfaces and memory in place.
+
+    reverse runs workgroups, warps and the threads of each instruction in the opposite order. Results
+    that differ between the two orders depend on the order in which threads run.
+    """
     ctx = _Context(launch, program.info)
     code: list[Step] = []
     for ins in program.instructions:
@@ -450,12 +457,15 @@ def run(program: Program, launch: Launch, *, step_limit: int = DEFAULT_STEP_LIMI
     info = program.info
     steps = 0
     gx, gy, gz = launch.grid
-    for z in range(gz):
-        for y in range(gy):
-            for x in range(gx):
-                ctx.cta = cta = Cta((x, y, z), info.local_size, info.shared_size)
-                steps = _run_cta(cta, code, program.instructions, steps, step_limit)
-    return Result(steps, gx * gy * gz)
+    ctas = [(x, y, z) for z in range(gz) for y in range(gy) for x in range(gx)]
+    for ctaid in reversed(ctas) if reverse else ctas:
+        ctx.cta = cta = Cta(ctaid, info.local_size, info.shared_size)
+        if reverse:
+            cta.warps.reverse()
+            for w in cta.warps:
+                w.threads.reverse()
+        steps = _run_cta(cta, code, program.instructions, steps, step_limit)
+    return Result(steps, len(ctas))
 
 
 def _raiser(err: Exception) -> Step:
@@ -842,6 +852,15 @@ def _mufu(ins: sass.Instruction, ctx: _Context) -> ThreadFn:
     d, a = ins.operands
     ra, w = _src(a, ctx, fp=True), _dst(d)
     mufu(func, 0)  # raises Unsupported for a function without a rule
+    given, address = ctx.launch.mufu_results, ins.address
+    if given is not None:
+
+        def from_given(t: Thread) -> None:
+            x = ra(t)
+            r = given.get((address, x))
+            w(t, mufu(func, x) if r is None else r)
+
+        return from_given
     return lambda t: w(t, mufu(func, ra(t)))
 
 

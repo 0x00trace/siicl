@@ -16,12 +16,13 @@ def fbits(x: float) -> int:
     return struct.unpack("<I", struct.pack("<f", x))[0]
 
 
-def run(lines, *, local=(32, 1, 1), shared=0, outputs=1, cbufs=None, surfaces=None, step_limit=100_000):
+def run(lines, *, local=(32, 1, 1), shared=0, outputs=1, cbufs=None, surfaces=None, step_limit=100_000, **kw):
     """Run a program on one workgroup; output k is the 1D surface with handle (0, k)."""
     threads = local[0] * local[1] * local[2]
     outs = {(0, k): interp.Surface(threads, channels=1) for k in range(1, outputs + 1)}
-    launch = interp.Launch((1, 1, 1), cbufs or {}, outs | (surfaces or {}))
-    interp.run(interp.Program(program(*lines), ComputeInfo(local, shared, 32, b"")), launch, step_limit=step_limit)
+    launch = interp.Launch((1, 1, 1), cbufs or {}, outs | (surfaces or {}), mufu_results=kw.pop("mufu_results", None))
+    prog = interp.Program(program(*lines), ComputeInfo(local, shared, 32, b""))
+    interp.run(prog, launch, step_limit=step_limit, **kw)
     return [outs[(0, k)].data for k in range(1, outputs + 1)]
 
 
@@ -232,22 +233,40 @@ def test_barrier_in_divergent_code_deadlocks():
         run(lines)
 
 
-def test_surface_atomics():
+SURFACE_ATOMICS = [
+    s2r(0, "SR_TID.X"),
+    ("LOP3.LUT R1, R0, 0x3, RZ, 0xc0, !PT", 0x812, {16: 1, 24: 0, 32: 3, 64: 255, 72: 0xC0, 81: 7, **PT_NOT}),
+    mov_imm(2, 1),
+    ("SUATOM.D.1D.ADD.STRONG.GPU.IGN R3, [R1], R2, 0x0, 0x2", 0x593, {16: 3, 24: 1, 32: 2, 40: 2, 76: 0xE, 87: 0}),
+    ("SURED.D.1D.OR.STRONG.GPU.IGN [R1], R0, 0x0, 0x3", 0x59F, {24: 1, 32: 0, 40: 3, 76: 0xE, 87: 6}),
+    store(0, 3),
+    exit_(),
+    bra_self(7),
+]
+
+
+def test_reverse_order_changes_only_order_dependent_results():
+    old, counts, bits = run(SURFACE_ATOMICS, outputs=3, reverse=True)
+    assert old == [7 - (tid >> 2) for tid in range(32)]  # the last lane now goes first
+    assert counts[:4] == [8] * 4 and bits[:4] == [c | 0x1C for c in range(4)]
+
+
+def test_recorded_mufu_results_replace_computed_ones():
     lines = [
         s2r(0, "SR_TID.X"),
-        ("LOP3.LUT R1, R0, 0x3, RZ, 0xc0, !PT", 0x812, {16: 1, 24: 0, 32: 3, 64: 255, 72: 0xC0, 81: 7, **PT_NOT}),
-        mov_imm(2, 1),
-        (
-            "SUATOM.D.1D.ADD.STRONG.GPU.IGN R3, [R1], R2, 0x0, 0x2",
-            0x593,
-            {16: 3, 24: 1, 32: 2, 40: 2, 76: 0xE, 87: 0},
-        ),
-        ("SURED.D.1D.OR.STRONG.GPU.IGN [R1], R0, 0x0, 0x3", 0x59F, {24: 1, 32: 0, 40: 3, 76: 0xE, 87: 6}),
-        store(0, 3),
+        ("I2FP.F32.U32 R1, R0", 0x245, {16: 1, 32: 0, 75: 2, 84: 2}),
+        ("MUFU.EX2 R2, R1", 0x308, {16: 2, 32: 1, 74: 2}),
+        store(0, 2),
         exit_(),
-        bra_self(7),
+        bra_self(5),
     ]
-    old, counts, bits = run(lines, outputs=3)
+    (out,) = run(lines, mufu_results={(0x20, fbits(3.0)): 0x12345678})
+    assert out[3] == 0x12345678
+    assert out[4] == fbits(16.0)  # no recorded result: computed
+
+
+def test_surface_atomics():
+    old, counts, bits = run(SURFACE_ATOMICS, outputs=3)
     assert old == [tid >> 2 for tid in range(32)]  # lanes run in order
     assert counts[:4] == [8] * 4 and bits[:4] == [c | 0x1C for c in range(4)]
 
