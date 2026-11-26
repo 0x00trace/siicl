@@ -394,6 +394,81 @@ def cmd_vzip_check_decoder(args: argparse.Namespace) -> int:
     return 0 if m == n else 1
 
 
+def _compute_programs(args: argparse.Namespace) -> list[tuple[str, nvshader.ShaderBinary]]:
+    out = []
+    with vzip.VzipReader.open(args.file) as r:
+        for e in r.unique_data():
+            if r.head(e, 4) != nvshader.MAGIC_BYTES or (args.entry and e.name not in args.entry):
+                continue
+            sh = nvshader.parse(r.read(e))
+            if sh.stage == "compute":
+                out.append((e.name, sh))
+    return out
+
+
+def cmd_vzip_check_gpu(args: argparse.Namespace) -> int:
+    from siicl import gpucheck, interp, translate, vk
+
+    programs = _compute_programs(args)
+    skipped: Counter[str] = Counter()
+    failed = matched = 0
+    try:
+        gpu = vk.Gpu()
+    except vk.VulkanError as err:
+        print(f"siicl: {err}", file=sys.stderr)
+        return 1
+    with gpu:
+        print(f"GPU: {gpu.name}; {len(programs):,} compute programs, {args.seeds} seeds each")
+        for name, sh in programs:
+            prog = interp.Program(sh.program_bytes(), sh.compute_info())
+            missing = prog.unsupported()
+            if missing:
+                skipped[f"the interpreter has {missing[0][1]}"] += 1
+                continue
+            try:
+                tr = translate.translate(prog.instructions, prog.info, mufu_log=True)
+            except translate.Unsupported as err:
+                skipped[f"the translator has {str(err).rsplit(': ', 1)[-1]}"] += 1
+                continue
+            checks = [gpucheck.check(prog, tr, gpu, seed) for seed in range(args.seeds)]
+            ran = set().union(*(c.executed for c in checks))
+            ulps: Counter[str] = Counter()
+            absolute: dict[str, float] = {}
+            for c in checks:
+                for func, n in c.mufu_ulps.items():
+                    ulps[func] = max(ulps[func], n)
+                for func, x in c.mufu_abs.items():
+                    absolute[func] = max(absolute.get(func, 0.0), x)
+            mufu = [f"{f} {n} ulps" for f, n in sorted(ulps.items())]
+            mufu += [f"{f} {x:.1e}" for f, x in sorted(absolute.items())]
+            statuses = Counter(c.status for c in checks)
+            ok = statuses["match"] == len(checks)
+            matched += ok
+            failed += statuses["mismatch"] + statuses["interpreter error"] > 0
+            print(
+                f"{name:<17} {len(prog.instructions):>6,} instructions: "
+                + ", ".join(f"{n} {s}" for s, n in statuses.items())
+                + f"; {sum(c.words for c in checks):,} words compared, "
+                f"{sum(c.order_dependent for c in checks):,} order-dependent, "
+                f"{sum(c.mismatch_count for c in checks):,} mismatches; "
+                f"{len(ran) / len(prog.instructions):.0%} of instructions ran"
+                + (f"; MUFU within {', '.join(mufu)}" if mufu else "")
+            )
+            for c in checks:
+                if c.error:
+                    print(f"    seed {c.seed}: {c.error}")
+                for handle, index, cpu, gpu_word in c.mismatches[: args.show]:
+                    print(
+                        f"    seed {c.seed}: surface {handle[0]:#x}, {handle[1]:#x} word {index:,}: "
+                        f"interpreter {cpu:#010x}, GPU {gpu_word:#010x}"
+                    )
+    checked = len(programs) - skipped.total()
+    print(f"Checked {checked:,} programs: {matched:,} match on every seed, {failed:,} have mismatches or errors")
+    for reason, n in skipped.most_common():
+        print(f"  not checked, {reason}: {n:,}")
+    return 1 if failed else 0
+
+
 def cmd_vzip_buffers(args: argparse.Namespace) -> int:
     known = _read_paths(Path(args.paths)) if args.paths else {}
     with vzip.VzipReader.open(args.file) as r:
@@ -528,6 +603,14 @@ def build_parser() -> argparse.ArgumentParser:
     v_chk.add_argument("--arch", default="SM86", help="SM version for nvdisasm (default SM86)")
     v_chk.add_argument("--show", type=int, default=3, help="mismatches to show per opcode (default 3)")
     v_chk.set_defaults(func=cmd_vzip_check_decoder)
+    v_gpu = vsub.add_parser(
+        "check-gpu", help="run compute programs as SPIR-V on a Vulkan GPU and compare with the interpreter"
+    )
+    v_gpu.add_argument("file")
+    v_gpu.add_argument("--entry", action="append", help="check only this entry; repeat for more")
+    v_gpu.add_argument("--seeds", type=int, default=8, help="input sets per program (default 8)")
+    v_gpu.add_argument("--show", type=int, default=3, help="mismatches to show per seed (default 3)")
+    v_gpu.set_defaults(func=cmd_vzip_check_gpu)
     v_buf = vsub.add_parser("buffers", help="match GPU data entries to the resources that own them")
     v_buf.add_argument("file")
     v_buf.add_argument("--list", action="store_true", help="also list each matched buffer")

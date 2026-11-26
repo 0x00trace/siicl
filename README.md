@@ -23,12 +23,14 @@ Reports go to `~/.cache/siicl/<title id>/` as `report.md` and `report.json`.
   - `shaders`: checks and summarises the compiled GPU shader binaries (`--nvdisasm SM86` also decodes each one)
   - `disasm`: disassembles one shader binary with NVIDIA's `nvdisasm`, or with siicl's own decoder (`--decoder siicl`)
   - `check-decoder`: compares siicl's instruction decoder with `nvdisasm` on every shader program
+  - `check-gpu`: translates each compute program to SPIR-V, runs it on a Vulkan GPU, and compares the results with siicl's reference interpreter
   - `buffers`: matches GPU data entries, such as shader binaries, to the resources that own them
 
 ## Requirements
 
 - Arch Linux packages: `python` (3.14), `uv`, `lz4`, `aarch64-linux-gnu-binutils`
 - Optional: `cuda`, for `nvdisasm` (`siicl vzip disasm`, `siicl vzip shaders --nvdisasm`)
+- Optional: a Vulkan driver and `vulkan-icd-loader`, for `siicl vzip check-gpu`; `spirv-tools`, for the tests that validate SPIR-V
 - No packages from PyPI at runtime
 
 ## Usage
@@ -58,3 +60,4 @@ git config core.hooksPath .githooks
 - [docs/sass-decoder.md](docs/sass-decoder.md): the GPU instruction decoder and the encoding it reads
 - [docs/interpreter.md](docs/interpreter.md): the reference interpreter that runs compute programs on the CPU
 - [docs/translation.md](docs/translation.md): the translation of compute programs to SPIR-V
+- [docs/gpu-check.md](docs/gpu-check.md): how translations are checked on a GPU, and the results on the sample

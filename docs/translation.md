@@ -1,6 +1,8 @@
 # SPIR-V translation
 
 `siicl.translate` turns a compute program into a SPIR-V 1.5 module for Vulkan 1.2. `translate(instructions, info)` takes the decoded instructions ([sass-decoder.md](sass-decoder.md)) and the launch parameters from the control section ([shader-format.md](shader-format.md)). It returns a `Translation`: the module, the descriptor bindings the module expects, and the workgroup size. `siicl.spirv` builds the module's binary encoding, with no packages outside the standard library.
+
+The translation is checked against the reference interpreter on a GPU; see [gpu-check.md](gpu-check.md).
 ## Program structure
 
 SPIR-V requires structured control flow, and a compiled program's branches can form any pattern. So the translation splits the program into basic blocks and runs them from a loop around a switch on a block number:
