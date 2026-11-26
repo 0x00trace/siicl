@@ -12,7 +12,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from siicl import a64scan, npdm, nso, nup, nvshader, paths, sass, vipr, vzip
+from siicl import a64scan, addrspace, boot, cpu, kernel, loader, npdm, nso, nup, nvshader, paths, sass, vipr, vzip
 from siicl.report import ModuleScan, Report, to_dict, to_markdown
 
 EXEFS_MODULES = (
@@ -108,6 +108,27 @@ def cmd_scan(args: argparse.Namespace) -> int:
     (out_dir / "report.json").write_text(json.dumps(to_dict(report), indent=2) + "\n")
     print(md)
     print(f"\nWrote {out_dir / 'report.md'} and {out_dir / 'report.json'}", file=sys.stderr)
+    return 0
+
+
+def cmd_boot(args: argparse.Namespace) -> int:
+    source = Path(args.file).expanduser()
+    title_id, mods, npdm_raw = _load_exefs(source)
+    if not mods:
+        print("siicl: no exefs modules found", file=sys.stderr)
+        return 2
+    label = f"{title_id:016X}" if title_id is not None else source.stem
+    out_dir = paths.ensure_outside_repo(Path(args.out) if args.out else paths.cache_dir() / label)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    process = kernel.Process(mods, npdm.parse(npdm_raw) if npdm_raw else None)
+    log_path = out_dir / "boot.log"
+    with log_path.open("w") as log:
+        print(
+            f"siicl boot log for {source.name}" + (f", title {title_id:016X}" if title_id is not None else ""), file=log
+        )
+        stop = boot.boot(process, log, max_instructions=args.max_instructions)
+    print(f"stopped: {boot.describe_stop(process, stop)}")
+    print(f"Wrote {log_path}", file=sys.stderr)
     return 0
 
 
@@ -557,6 +578,17 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--module", action="append", help="scan only this module; repeat for more")
     scan.set_defaults(func=cmd_scan)
 
+    bt = sub.add_parser("boot", help="start a game and log what it does until it stops")
+    bt.add_argument("file", help="a NUP container, or a folder that holds exefs files")
+    bt.add_argument("--out", help="output folder for boot.log (default ~/.cache/siicl/<title id>)")
+    bt.add_argument(
+        "--max-instructions",
+        type=int,
+        default=10_000_000_000,
+        help="stop after this many guest instructions (default 10,000,000,000)",
+    )
+    bt.set_defaults(func=cmd_boot)
+
     vz = sub.add_parser("vzip", help="read the VZIP archive in a NUP container's romfs (or a VZIP file)")
     vsub = vz.add_subparsers(dest="vzip_command", required=True)
     v_list = vsub.add_parser("list", help="list the index entries")
@@ -641,6 +673,10 @@ def main(argv: list[str] | None = None) -> int:
         nvshader.ShaderError,
         a64scan.ScanError,
         paths.OutputPathError,
+        loader.LoaderError,
+        addrspace.AddressSpaceError,
+        kernel.ProcessError,
+        cpu.CpuError,
         KeyError,
     ) as e:
         print(f"siicl: {e}", file=sys.stderr)

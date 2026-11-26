@@ -1,6 +1,6 @@
 # SIICL
 
-SIICL is a research project toward a Switch 2 compatibility layer for Linux, to run your own Switch 2 game dumps. It is at the first step: measuring what a game needs before any of the layer is designed. The next goal is in [docs/roadmap.md](docs/roadmap.md): boot a game and show the first frame it presents.
+SIICL is a research project toward a Switch 2 compatibility layer for Linux, to run your own Switch 2 game dumps. It measures what a game needs, and has started on the layer itself: `siicl boot` loads a game and runs it until it reaches something siicl does not implement yet. The goal it works towards is in [docs/roadmap.md](docs/roadmap.md): boot a game and show the first frame it presents.
 
 ## What it does today
 
@@ -12,6 +12,8 @@ SIICL is a research project toward a Switch 2 compatibility layer for Linux, to 
   - the services the process may connect to
 
 Reports go to `~/.cache/siicl/<title id>/` as `report.md` and `report.json`.
+
+- `siicl boot` loads a game's executables into a guest address space, starts its main thread in a CPU emulator and runs it until it stops. It writes where and why it stopped, with the registers and a backtrace, to `~/.cache/siicl/<title id>/boot.log`.
 
 - `siicl vzip` reads the VZIP archive that holds a game's data (the romfs of a NUP container):
   - `stats`: a summary and a count of file types
@@ -31,7 +33,7 @@ Reports go to `~/.cache/siicl/<title id>/` as `report.md` and `report.json`.
 - Arch Linux packages: `python` (3.14), `uv`, `lz4`, `aarch64-linux-gnu-binutils`
 - Optional: `cuda`, for `nvdisasm` (`siicl vzip disasm`, `siicl vzip shaders --nvdisasm`)
 - Optional: a Vulkan driver and `vulkan-icd-loader`, for `siicl vzip check-gpu`; `spirv-tools`, for the tests that validate SPIR-V
-- No packages from PyPI at runtime
+- One package from PyPI at runtime, which `uv` installs: `unicorn`, the CPU emulator that runs the game's code
 
 ## Usage
 
@@ -39,6 +41,7 @@ Reports go to `~/.cache/siicl/<title id>/` as `report.md` and `report.json`.
 uv run siicl info  ~/Games/game_dumps/switch_2/game.nup
 uv run siicl scan  ~/Games/game_dumps/switch_2/game.nup
 uv run siicl scan  ~/Games/game_dumps/switch_2/game.nup --module main --jobs 8
+uv run siicl boot  ~/Games/game_dumps/switch_2/game.nup
 uv run siicl vzip stats  ~/Games/game_dumps/switch_2/game.nup
 uv run siicl vzip paths  ~/Games/game_dumps/switch_2/game.nup
 uv run siicl vzip extract ~/Games/game_dumps/switch_2/game.nup --out ~/siicl-out --path data/dir/file.png.import
@@ -61,3 +64,4 @@ git config core.hooksPath .githooks
 - [docs/interpreter.md](docs/interpreter.md): the reference interpreter that runs compute programs on the CPU
 - [docs/translation.md](docs/translation.md): the translation of compute programs to SPIR-V
 - [docs/gpu-check.md](docs/gpu-check.md): how translations are checked on a GPU, and the results on the sample
+- [docs/boot.md](docs/boot.md): how `siicl boot` loads a game and starts it, and what the boot log shows

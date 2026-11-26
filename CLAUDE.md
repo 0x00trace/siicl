@@ -1,6 +1,6 @@
 # SIICL
 
-Research tools toward a Switch 2 compatibility layer (SIICL) that runs the user's own Switch 2 game dumps on Linux. Today the repo holds readers for the dump formats and a scanner that measures what a game's code needs from the CPU and the OS.
+Research tools toward a Switch 2 compatibility layer (SIICL) that runs the user's own Switch 2 game dumps on Linux. The repo holds readers for the dump formats, a scanner that measures what a game's code needs from the CPU and the OS, a GPU shader translator, and the start of the layer itself (`siicl boot`). The current goal and its stages are in `docs/roadmap.md`.
 
 ## Rule: no game content in this repository
 
@@ -14,16 +14,17 @@ Never commit game files or anything taken from them. This covers dumps, extracte
 
 ## Commands
 
-- Tests: `uv run --offline pytest` (the system `pytest` also works: `python -m pytest`)
+- Tests: `uv run --offline pytest`. The system `pytest` does not work: it can't import `unicorn` from the project's environment.
 - Lint and format: `uvx ruff check` and `uvx ruff format`
 - Describe a dump: `uv run siicl info <file.nup>`
 - Scan a dump: `uv run siicl scan <file.nup>`
+- Boot a dump until it stops, and write `boot.log`: `uv run siicl boot <file.nup>`
 - Read the game data archive: `uv run siicl vzip stats|list|paths|extract|verify|grep|shaders|disasm|buffers|check-decoder <file.nup>`
 - Check the SPIR-V translation of compute programs on the GPU: `uv run siicl vzip check-gpu <file.nup>`
 
 ## Environment
 
-- Python 3.14. The runtime uses only the standard library: `compression.zstd`, and `ctypes` for the system liblz4 (pacman package `lz4`).
+- Python 3.14. The runtime uses the standard library (`compression.zstd`, and `ctypes` for the system liblz4, pacman package `lz4`) and one package from PyPI: `unicorn`, the CPU emulator that runs game code. Add no other runtime packages without asking.
 - The scanner runs `aarch64-linux-gnu-objdump` (pacman package `aarch64-linux-gnu-binutils`). Tests also use `aarch64-linux-gnu-as` from the same package.
 - `nvdisasm` comes from the pacman package `cuda` and is in `/opt/cuda/bin`. The shader tests that need it skip when it is missing.
 - The GPU runner (`siicl.vk`) calls the system `libvulkan` through `ctypes` (pacman package `vulkan-icd-loader`). The tests that need a Vulkan GPU skip without one, and the SPIR-V tests use `spirv-val` (pacman package `spirv-tools`). `vulkan-headers`, `spirv-headers` and `vulkan-validation-layers` help when changing the runner or the translator; `vk.Gpu(validation=True)` turns the validation layer on.

@@ -34,6 +34,8 @@ The image must come from the game's own GPU commands. If the first image the gam
 
 Each stage is a stack of pull requests. Each ends at a point that both the tests and the sample can check.
 
+Status: stage 1 is done. On the sample, rtld relocates itself and stops at its first SVC, a QueryMemory call. See [boot.md](boot.md).
+
 | Stage | Work | Done when |
 |---|---|---|
 | 1. Loader | Place the modules (rtld first, then main, the subsdk modules and sdk) in a 39-bit address space, with the right permissions and zeroed BSS. Set up the main thread: stack, thread-local storage and entry registers. | Tests load synthetic NSO files. The sample runs its first instructions in rtld and stops at its first SVC. |
