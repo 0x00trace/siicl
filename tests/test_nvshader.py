@@ -22,9 +22,10 @@ def sph(shader_type: int, *, pixel: bool, kills: bool = False) -> bytes:
     return struct.pack("<I", word) + bytes(nvshader.SPH_SIZE - 4)
 
 
-def build_shader(body: bytes, header: bytes = b"", *, end: bool = True) -> bytes:
+def build_shader(body: bytes, header: bytes = b"", *, end: bool = True, control: bytes | None = None) -> bytes:
     code = header + body + ((EXIT + BRA_SELF) if end else b"") + NOP * 4
-    control = struct.pack("<I", nvshader.CONTROL_MAGIC) + bytes(0x1C)
+    if control is None:
+        control = struct.pack("<I", nvshader.CONTROL_MAGIC) + bytes(0x1C)
     return struct.pack("<IIIIQ", nvshader.MAGIC, len(code), len(control), 0, 0xABCD) + code + control
 
 
@@ -50,6 +51,36 @@ def test_parses_vertex_and_compute_programs():
     assert compute.stage == "compute" and compute.header is None
     assert nvshader.opcode(compute.instructions()[0][0]) == 0x919
     assert nvshader.parse(COMPUTE_MOV_FIRST).stage == "compute"
+
+
+def compute_control(*, local=(8, 4, 2), shared=0x400, registers=24, constants=(0, 0)) -> bytes:
+    c = bytearray(0xE0)
+    struct.pack_into("<I", c, 0, nvshader.CONTROL_MAGIC)
+    struct.pack_into("<II", c, 0x38, *constants)
+    struct.pack_into("<I", c, 0x4C, registers)
+    struct.pack_into("<IIII", c, 0x58, *local, shared)
+    return bytes(c)
+
+
+def test_reads_compute_parameters():
+    sh = nvshader.parse(build_shader(insn(0x919), control=compute_control(constants=(0x40, 8))))
+    sh.code = sh.code[:0x40] + struct.pack("<ff", 1.5, -2.0) + sh.code[0x48:]
+    info = sh.compute_info()
+    assert info.local_size == (8, 4, 2)
+    assert info.shared_size == 0x400
+    assert info.registers == 24
+    assert struct.unpack("<ff", info.constants) == (1.5, -2.0)
+
+
+def test_rejects_bad_compute_parameters():
+    with pytest.raises(nvshader.ShaderError, match="too short"):
+        nvshader.parse(COMPUTE).compute_info()
+    with pytest.raises(nvshader.ShaderError, match="outside"):
+        nvshader.parse(build_shader(insn(0x919), control=compute_control(constants=(0x40, 0x1000)))).compute_info()
+    with pytest.raises(nvshader.ShaderError, match="zero"):
+        nvshader.parse(build_shader(insn(0x919), control=compute_control(local=(8, 0, 1)))).compute_info()
+    with pytest.raises(nvshader.ShaderError, match="no compute"):
+        nvshader.parse(FRAGMENT).compute_info()
 
 
 def test_rejects_a_program_without_an_end():

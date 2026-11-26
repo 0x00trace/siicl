@@ -143,6 +143,36 @@ class ShaderBinary:
         """The program's instructions, without the program header and the padding after it."""
         return b"".join(struct.pack("<QQ", lo, hi) for lo, hi in self.instructions())
 
+    def compute_info(self) -> ComputeInfo:
+        """The launch parameters that a compute program's control section holds."""
+        if self.header is not None:
+            raise ShaderError(f"a {self.stage} program has no compute parameters")
+        if len(self.control) < CONTROL_COMPUTE_END:
+            raise ShaderError(f"control section is {len(self.control)} bytes, too short for compute parameters")
+        const_offset, const_size = struct.unpack_from("<II", self.control, 0x38)
+        registers = struct.unpack_from("<I", self.control, 0x4C)[0]
+        local = struct.unpack_from("<III", self.control, 0x58)
+        shared = struct.unpack_from("<I", self.control, 0x64)[0]
+        if const_offset + const_size > len(self.code):
+            raise ShaderError(f"constant data {const_offset:#x}+{const_size:#x} is outside the code")
+        if not all(local):
+            raise ShaderError(f"workgroup size {local} has a zero dimension")
+        constants = self.code[const_offset : const_offset + const_size]
+        return ComputeInfo(local, shared, registers, constants)
+
+
+CONTROL_COMPUTE_END = 0x68
+
+
+@dataclass(frozen=True)
+class ComputeInfo:
+    """Launch parameters of a compute program (docs/shader-format.md)."""
+
+    local_size: tuple[int, int, int]  # threads per workgroup in x, y and z
+    shared_size: int  # bytes of shared memory per workgroup
+    registers: int  # general registers per thread
+    constants: bytes  # constant data that the program reads as constant buffer 1
+
 
 def parse(data: bytes) -> ShaderBinary:
     if len(data) < HEADER_SIZE or data[:4] != MAGIC_BYTES:
