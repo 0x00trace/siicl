@@ -12,7 +12,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from siicl import a64scan, npdm, nso, nup, nvshader, paths, vzip
+from siicl import a64scan, npdm, nso, nup, nvshader, paths, vipr, vzip
 from siicl.report import ModuleScan, Report, to_dict, to_markdown
 
 EXEFS_MODULES = (
@@ -339,6 +339,53 @@ def cmd_vzip_disasm(args: argparse.Namespace) -> int:
     return 1 if dis.errors else 0
 
 
+def cmd_vzip_buffers(args: argparse.Namespace) -> int:
+    known = _read_paths(Path(args.paths)) if args.paths else {}
+    with vzip.VzipReader.open(args.file) as r:
+        m = vipr.match_buffers(r)
+        by_offset = {e.offset: e for e in r.unique_data()}
+        records: Counter[str] = Counter()
+        matched: Counter[str] = Counter()
+        rows = []
+        for e in r.unique_data():
+            if r.head(e, 4) != vipr.MAGIC:
+                continue
+            data = r.read(e)
+            refs = vipr.buffer_refs(data)
+            if refs:
+                t = vipr.gpu_buffer_type(data)
+                records[t.label if t else "no GPU type"] += len(refs)
+        for offset, owner in sorted(m.owners.items()):
+            t = vipr.gpu_buffer_type(r.head(owner.resource, 0x20))
+            matched[t.label if t else "no GPU type"] += 1
+            if args.list:
+                buf = by_offset[offset]
+                rows.append(
+                    (
+                        buf.name,
+                        vzip.file_type(r.head(buf, 64)),
+                        buf.size,
+                        owner.ref.index,
+                        owner.ref.count,
+                        owner.resource.name,
+                        next((known[a.name] for a in r.aliases(owner.resource) if a.name in known), ""),
+                    )
+                )
+    if args.list:
+        print(f"{'Buffer':<17} {'Type':<12} {'Size':>12} Index  {'Resource':<17} Path")
+        for name, kind, size, index, count, res, path in rows:
+            print(f"{name:<17} {kind:<12} {size:>12,} {index:>3}/{count:<4} {res:<17} {path}")
+        print()
+    print(f"Images that list external buffers: {m.resources:,}")
+    print(
+        "Buffer records, by the GPU type the image declares, and how many match an entry stored just before the image:"
+    )
+    print(f"  {'Type':<24} {'Records':>9} {'Matched':>9}")
+    for label, count in records.most_common():
+        print(f"  {label:<24} {count:>9,} {matched[label]:>9,}")
+    return 0
+
+
 def cmd_vzip_verify(args: argparse.Namespace) -> int:
     res = _run_pass(args, None)
     print(f"Checked {res.checked:,} files ({_gib(res.bytes)}): {len(res.failures):,} failed")
@@ -415,6 +462,11 @@ def build_parser() -> argparse.ArgumentParser:
     v_dis.add_argument("entry", help="an entry name, or an asset path")
     v_dis.add_argument("--arch", default="SM86", help="SM version for nvdisasm (default SM86)")
     v_dis.set_defaults(func=cmd_vzip_disasm)
+    v_buf = vsub.add_parser("buffers", help="match GPU data entries to the resources that own them")
+    v_buf.add_argument("file")
+    v_buf.add_argument("--list", action="store_true", help="also list each matched buffer")
+    v_buf.add_argument("--paths", help="a TSV from 'siicl vzip paths' to show resource paths")
+    v_buf.set_defaults(func=cmd_vzip_buffers)
     v_ver = vsub.add_parser("verify", help="decompress every entry and check its CRC-32")
     v_ver.add_argument("file")
     v_ver.add_argument("--jobs", type=int, default=8, help="worker processes (default 8)")

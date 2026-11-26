@@ -40,7 +40,7 @@ Records are sorted by key in ascending order, so a reader can find a key by bina
 ## Names and keys
 
 - The string table holds the names, each ending with a NUL byte.
-- A name is the FNV-1a 64-bit hash of the asset's path, written in lowercase hexadecimal without leading zeros. The path is hashed without its leading `/`, for example `data/dir/file.png.import`.
+- A name is the FNV-1a 64-bit hash of the asset's path, written in lowercase hexadecimal without leading zeros. The path is hashed without its leading `/`, and the letters A-Z are lowercased first, as the game's lookup does. For example, `/Data/Dir/File.png.import` and `data/dir/file.png.import` give the same name.
 - A key is the FNV-1a 32-bit hash of the name's text.
 - Several records can point at the same data. These aliases share one stored copy, and only one of their names appears in the ZIP central directory.
 - The archive does not store paths. Resource files name other assets by path, so hashing those path strings recovers many names (`siicl vzip paths`).
@@ -58,6 +58,16 @@ Records are sorted by key in ascending order, so a reader can find a key by bina
 Compressed data is a sequence of blocks. Each block is a 4-byte length followed by a raw LZ4 block of that length. Each block decodes to 64 KiB, except the last.
 
 The blocks are linked, as in LZ4's streaming mode: a block can copy from the 64 KiB of output that comes before it. So the blocks must be decoded in order into one buffer. The first block doesn't depend on any other, so the start of a file can be read by decoding the first block alone.
+
+## Resources and their GPU data
+
+A resource (`VIPR`) file holds one image in the engine's binary format. When the image has GPU data, such as compiled shaders, that data is not inside the file: each piece is a separate archive entry, which the image calls an external buffer.
+
+- The 32-bit word at offset 0x18 of the resource declares the GPU buffer type: bits 26-29 are the graphics backend (12 is NVN gen2) and bits 22-24 the kind (1 buffer, 2 texture).
+- The image lists each external buffer in a record of 32 bytes: the buffer count (a 32-bit value followed by the tag 0xBFFF0000), the buffer's index (a 32-bit value followed by the tag 0xCFFF0000), 8 zero bytes, and the buffer's size as a 64-bit value.
+- For compiled shaders, the buffers are stored as entries directly before their resource, in archive order. In the sample this pairs all 2,828 shader binaries with their resources: the sizes in the records match the preceding entries for 980 of the 990 resources, and the other 10 list buffers whose identical data was stored only once, before another resource. `siicl vzip buffers` does this matching.
+- Texture and mesh data don't follow this layout. None of the texture records match the entries before their resource.
+- The archive names of the buffer entries are not stored in any file in the archive, and none of the tested ways to build them from the resource's path, index or GUIDs gives them. The game computes them in code that this project has not traced yet.
 
 ## Contents of the sample
 

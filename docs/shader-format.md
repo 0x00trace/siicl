@@ -74,5 +74,5 @@ So the programs are SM 8.6-class Ampere code. The instruction bits don't show wh
 
 ## Not yet known
 
-- How a resource (`VIPR`) file refers to its compiled binary. The binary's hash and index key don't appear in the resource.
+- How the game names a shader binary's archive entry. A resource finds its binaries by index, and they are stored right before it (see [vzip-format.md](vzip-format.md)), but the entry names appear in no file.
 - The contents of the control section.

@@ -22,6 +22,7 @@ Reports go to `~/.cache/siicl/<title id>/` as `report.md` and `report.json`.
   - `grep`: lists entries whose data contains a byte pattern
   - `shaders`: checks and summarises the compiled GPU shader binaries (`--nvdisasm SM86` also decodes each one)
   - `disasm`: disassembles one shader binary with NVIDIA's `nvdisasm`
+  - `buffers`: matches GPU data entries, such as shader binaries, to the resources that own them
 
 ## Requirements
 
