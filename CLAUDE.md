@@ -17,10 +17,11 @@ Never commit game files or anything taken from them. This covers dumps, extracte
 - Lint and format: `uvx ruff check` and `uvx ruff format`
 - Describe a dump: `uv run siicl info <file.nup>`
 - Scan a dump: `uv run siicl scan <file.nup>`
-- Read the game data archive: `uv run siicl vzip stats|list|paths|extract|verify|grep|shaders <file.nup>`
+- Read the game data archive: `uv run siicl vzip stats|list|paths|extract|verify|grep|shaders|disasm <file.nup>`
 
 ## Environment
 
 - Python 3.14. The runtime uses only the standard library: `compression.zstd`, and `ctypes` for the system liblz4 (pacman package `lz4`).
 - The scanner runs `aarch64-linux-gnu-objdump` (pacman package `aarch64-linux-gnu-binutils`). Tests also use `aarch64-linux-gnu-as` from the same package.
+- `nvdisasm` comes from the pacman package `cuda` and is in `/opt/cuda/bin`. The shader tests that need it skip when it is missing.
 - Dumps live in `~/Games/game_dumps/switch_2`.

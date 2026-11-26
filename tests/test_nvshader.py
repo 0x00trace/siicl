@@ -98,3 +98,47 @@ def test_cli_reports_broken_programs(tmp_path, capsys):
     p.write_bytes(build_vzip([("bad", build_shader(insn(0x220), end=False), False)]))
     assert cli.main(["vzip", "shaders", str(p)]) == 1
     assert "problem: bad" in capsys.readouterr().out
+
+
+# Encodings of four simple instructions, as NVIDIA's compiler writes them.
+MOV_HALF = struct.pack("<QQ", 0x3F00000000027802, 0x000FE40000000F00)  # MOV R2, 0x3f000000
+REAL_EXIT = struct.pack("<QQ", 0x000000000000794D, 0x000FEA0003800000)
+REAL_NOP = struct.pack("<QQ", 0x0000000000007918, 0x000FC00000000000)
+needs_nvdisasm = pytest.mark.skipif(nvshader.find_nvdisasm() is None, reason="nvdisasm (cuda) is not installed")
+
+
+def _real_program() -> bytes:
+    code = MOV_HALF + REAL_EXIT + BRA_SELF + REAL_NOP * 2
+    control = struct.pack("<I", nvshader.CONTROL_MAGIC) + bytes(0x1C)
+    return struct.pack("<IIIIQ", nvshader.MAGIC, len(code), len(control), 0, 1) + code + control
+
+
+def test_program_bytes_stop_at_the_end():
+    sh = nvshader.parse(_real_program())
+    assert sh.program_bytes() == MOV_HALF + REAL_EXIT + BRA_SELF
+
+
+@needs_nvdisasm
+def test_disassembles_with_nvdisasm():
+    dis = nvshader.disassemble(MOV_HALF + REAL_EXIT + BRA_SELF, "SM86")
+    assert dis.errors == []
+    assert "MOV R2, 0x3f000000" in dis.text
+    assert "EXIT" in dis.text
+    assert "BRA 0x20" in dis.text
+
+
+@needs_nvdisasm
+def test_nvdisasm_errors_are_reported():
+    assert nvshader.disassemble(b"\xff" * 16, "SM86").errors
+
+
+@needs_nvdisasm
+def test_cli_disasm_and_nvdisasm_check(tmp_path, capsys):
+    p = tmp_path / "a.zip"
+    p.write_bytes(build_vzip([("abc", _real_program(), True)]))
+    assert cli.main(["vzip", "disasm", str(p), "abc"]) == 0
+    out = capsys.readouterr().out
+    assert "compute program, 3 instructions" in out
+    assert "MOV R2, 0x3f000000" in out
+    assert cli.main(["vzip", "shaders", str(p), "--nvdisasm", "SM86"]) == 0
+    assert "SM86: 1 of 1 programs decode without errors" in capsys.readouterr().out

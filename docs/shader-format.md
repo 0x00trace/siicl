@@ -2,7 +2,7 @@
 
 This describes the compiled GPU shader binaries found in a VZIP archive, as worked out from one sample. All integers are little-endian.
 
-Each binary holds one GPU program in the 128-bit instruction encoding that NVIDIA has used since Volta. The program header and the instruction fields below follow NVIDIA's public shader program header layout and the encoding that disassemblers show for these GPUs.
+Each binary holds one GPU program in the 128-bit instruction encoding that NVIDIA has used since Volta; the sample's programs are Ampere (SM 8.6-class) code. The program header and the instruction fields below follow NVIDIA's public shader program header layout and the encoding that disassemblers show for these GPUs.
 
 ## Layout
 
@@ -56,7 +56,21 @@ A program ends with `EXIT` (opcode 0x94D), then `BRA` (0x947) to its own address
 - bits 126-127 are zero in every instruction
 - `KILL` (0x95B) appears in a fragment program exactly when its header says it may discard pixels
 
-It also counts `ULDC` (0xAB9), which loads a constant into a uniform register. Uniform registers were added in Turing, so programs that use `ULDC` target Turing or a later GPU. These checks can't tell Turing, Ampere and Ada apart. NVIDIA's `nvdisasm` can: run it with `--binary SM86` (or another SM version) on the instruction bytes.
+It also counts `ULDC` (0xAB9), which loads a constant into a uniform register. Uniform registers were added in Turing, so programs that use `ULDC` target Turing or a later GPU.
+
+## Decoding with nvdisasm
+
+NVIDIA's `nvdisasm` (CUDA toolkit, pacman package `cuda`) decodes raw instruction bytes for a chosen SM version. `siicl vzip shaders --nvdisasm SM86` decodes every program this way, and `siicl vzip disasm` prints one program. Results for the sample with CUDA 13.5:
+
+| SM version | Result |
+|---|---|
+| SM75 (Turing), SM80 (Ampere A100) | Rejected in about half the programs. The first rejected instruction is `I2FP` (integer-to-float conversion), which first appears in SM 8.6. |
+| SM86, SM87, SM88 (Ampere) | Every program decodes, and the output is identical for all three. |
+| SM89 (Ada) | Every program decodes. One conversion instruction prints under a different name. |
+| SM90 (Hopper) | Every program decodes, but branch targets come out different and point outside the programs. |
+| SM100, SM120 (Blackwell) | Most instructions are rejected. |
+
+So the programs are SM 8.6-class Ampere code. The instruction bits don't show which of SM 8.6, 8.7 and 8.8 the compiler targeted.
 
 ## Not yet known
 

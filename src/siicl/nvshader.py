@@ -7,8 +7,12 @@ is described in docs/shader-format.md.
 
 from __future__ import annotations
 
+import os
+import shutil
 import struct
-from dataclasses import dataclass
+import subprocess
+import tempfile
+from dataclasses import dataclass, field
 
 MAGIC = 0x19866891
 MAGIC_BYTES = struct.pack("<I", MAGIC)
@@ -134,6 +138,10 @@ class ShaderBinary:
                 return out
         raise ShaderError("program has no EXIT followed by a BRA to itself")
 
+    def program_bytes(self) -> bytes:
+        """The program's instructions, without the program header and the padding after it."""
+        return b"".join(struct.pack("<QQ", lo, hi) for lo, hi in self.instructions())
+
 
 def parse(data: bytes) -> ShaderBinary:
     if len(data) < HEADER_SIZE or data[:4] != MAGIC_BYTES:
@@ -148,3 +156,40 @@ def parse(data: bytes) -> ShaderBinary:
     else:
         header = None
     return ShaderBinary(code_size, control_size, digest, header, code, data[HEADER_SIZE + code_size :])
+
+
+# -- disassembly with NVIDIA's nvdisasm (CUDA toolkit) -------------------------
+
+NVDISASM_CANDIDATES = ("nvdisasm", "/opt/cuda/bin/nvdisasm")
+
+
+def find_nvdisasm() -> str | None:
+    override = os.environ.get("SIICL_NVDISASM")
+    if override:
+        return override
+    for name in NVDISASM_CANDIDATES:
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
+@dataclass
+class Disassembly:
+    text: str
+    errors: list[str] = field(default_factory=list)
+
+
+def disassemble(code: bytes, arch: str = "SM86", *, nvdisasm: str | None = None) -> Disassembly:
+    """Disassemble raw instruction bytes with nvdisasm --binary <arch>."""
+    tool = nvdisasm or find_nvdisasm()
+    if tool is None:
+        raise ShaderError("nvdisasm not found: install the cuda package or set SIICL_NVDISASM")
+    with tempfile.NamedTemporaryFile(prefix="siicl-", suffix=".bin") as f:
+        f.write(code)
+        f.flush()
+        proc = subprocess.run([tool, "--binary", arch, f.name], capture_output=True, text=True)
+    errors = [line.strip() for line in (proc.stdout + proc.stderr).splitlines() if "error" in line.lower()]
+    if proc.returncode and not errors:
+        errors.append(f"nvdisasm exited with status {proc.returncode}")
+    return Disassembly(proc.stdout, errors)

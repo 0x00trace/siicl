@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import struct
 import sys
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from siicl import a64scan, npdm, nso, nup, nvshader, paths, vzip
@@ -253,6 +256,7 @@ def cmd_vzip_shaders(args: argparse.Namespace) -> int:
     uldc_programs = 0
     problems: list[tuple[str, str]] = []
     rows = []
+    programs: list[tuple[str, bytes]] = []
     with vzip.VzipReader.open(args.file) as r:
         for e in r.unique_data():
             if r.head(e, 4) != nvshader.MAGIC_BYTES:
@@ -276,6 +280,8 @@ def cmd_vzip_shaders(args: argparse.Namespace) -> int:
                 checks["fragment"] += 1
                 checks["kill"] += sh.header.kills_pixels == (nvshader.OP_KILL in these)
             rows.append((e.name, sh.stage, len(insns)))
+            if args.nvdisasm:
+                programs.append((e.name, b"".join(struct.pack("<QQ", lo, hi) for lo, hi in insns)))
     n = len(counts)
     if args.list:
         for name, stage, count in rows:
@@ -299,9 +305,38 @@ def cmd_vzip_shaders(args: argparse.Namespace) -> int:
     print("Most common opcodes:")
     for op, count in ops.most_common(args.top):
         print(f"  {nvshader.opcode_name(op):<8} 0x{op:03x} {count:>10,}")
+    if args.nvdisasm:
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            results = list(pool.map(lambda p: nvshader.disassemble(p[1], args.nvdisasm), programs))
+        failed = [(name, res.errors[0]) for (name, _), res in zip(programs, results, strict=True) if res.errors]
+        print(
+            f"nvdisasm --binary {args.nvdisasm}: {len(programs) - len(failed):,} of {len(programs):,} programs "
+            "decode without errors"
+        )
+        problems += failed
     for name, err in problems[:20]:
         print(f"problem: {name}: {err}")
     return 1 if problems else 0
+
+
+def cmd_vzip_disasm(args: argparse.Namespace) -> int:
+    with vzip.VzipReader.open(args.file) as r:
+        e = r.find_path(args.entry) if "/" in args.entry else r.find(args.entry)
+        sh = nvshader.parse(r.read(e))
+    code = sh.program_bytes()
+    print(f"// {e.name}: {sh.stage} program, {len(code) // nvshader.INSTRUCTION_SIZE:,} instructions")
+    if sh.header:
+        h = sh.header
+        print(
+            f"// program header: type {h.sph_type}, version {h.version}, shader type {h.shader_type}, "
+            f"multiple render targets {'yes' if h.mrt_enable else 'no'}, "
+            f"may discard pixels {'yes' if h.kills_pixels else 'no'}"
+        )
+    dis = nvshader.disassemble(code, args.arch)
+    print(dis.text, end="")
+    for err in dis.errors:
+        print(f"siicl: {err}", file=sys.stderr)
+    return 1 if dis.errors else 0
 
 
 def cmd_vzip_verify(args: argparse.Namespace) -> int:
@@ -373,7 +408,13 @@ def build_parser() -> argparse.ArgumentParser:
     v_sh.add_argument("file")
     v_sh.add_argument("--list", action="store_true", help="also list each binary")
     v_sh.add_argument("--top", type=int, default=20, help="opcodes to show (default 20)")
+    v_sh.add_argument("--nvdisasm", metavar="SM", help="also decode every program with nvdisasm, such as SM86")
     v_sh.set_defaults(func=cmd_vzip_shaders)
+    v_dis = vsub.add_parser("disasm", help="disassemble one shader binary with nvdisasm")
+    v_dis.add_argument("file")
+    v_dis.add_argument("entry", help="an entry name, or an asset path")
+    v_dis.add_argument("--arch", default="SM86", help="SM version for nvdisasm (default SM86)")
+    v_dis.set_defaults(func=cmd_vzip_disasm)
     v_ver = vsub.add_parser("verify", help="decompress every entry and check its CRC-32")
     v_ver.add_argument("file")
     v_ver.add_argument("--jobs", type=int, default=8, help="worker processes (default 8)")
@@ -396,6 +437,7 @@ def main(argv: list[str] | None = None) -> int:
         nso.NsoError,
         npdm.NpdmError,
         vzip.VzipError,
+        nvshader.ShaderError,
         a64scan.ScanError,
         paths.OutputPathError,
         KeyError,

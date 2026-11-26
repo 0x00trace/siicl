@@ -20,11 +20,13 @@ Reports go to `~/.cache/siicl/<title id>/` as `report.md` and `report.json`.
   - `extract`: writes chosen entries (by name, path or file type) to a folder outside the repository
   - `verify`: decompresses every entry and checks its CRC-32
   - `grep`: lists entries whose data contains a byte pattern
-  - `shaders`: checks and summarises the compiled GPU shader binaries
+  - `shaders`: checks and summarises the compiled GPU shader binaries (`--nvdisasm SM86` also decodes each one)
+  - `disasm`: disassembles one shader binary with NVIDIA's `nvdisasm`
 
 ## Requirements
 
 - Arch Linux packages: `python` (3.14), `uv`, `lz4`, `aarch64-linux-gnu-binutils`
+- Optional: `cuda`, for `nvdisasm` (`siicl vzip disasm`, `siicl vzip shaders --nvdisasm`)
 - No packages from PyPI at runtime
 
 ## Usage
