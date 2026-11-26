@@ -7,6 +7,7 @@ Research tools toward a Switch 2 compatibility layer (SIICL) that runs the user'
 Never commit game files or anything taken from them. This covers dumps, extracted executables and NPDM files, romfs files, icons, shaders, disassembly or decompiled code, strings, screenshots, video or audio of a game, and reports generated from a dump.
 
 - Keep these outside the repository. The tools write to `~/.cache/siicl` by default and refuse an output folder inside the repository.
+- This includes saved output of `siicl vzip disasm`. The hook refuses `.sass` and `.disasm` files, but can't recognize disassembly saved under other names.
 - Tests use synthetic data that the test builds itself. Never point a test at a real dump.
 - The pre-commit hook in `.githooks/` refuses such files. Enable it in each clone with `git config core.hooksPath .githooks`.
 - Describe formats in `docs/` in general terms. Don't name the game a sample came from, and don't copy its file names or values.

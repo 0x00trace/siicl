@@ -18,6 +18,7 @@ BLOCKED_SUFFIXES = {
     ".npdm", ".kip", ".zip", ".bin", ".keys",
     ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tga", ".dds",
     ".mp4", ".mkv", ".webm", ".avi", ".mov", ".wav", ".ogg", ".flac", ".mp3",
+    ".sass", ".disasm",
 }
 
 # (offset, magic bytes, what it is)

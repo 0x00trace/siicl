@@ -41,6 +41,8 @@ build/
 *.ogg
 *.flac
 *.mp3
+*.sass
+*.disasm
 /out/
 /dumps/
 /extracted/
