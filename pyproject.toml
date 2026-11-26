@@ -7,7 +7,9 @@ authors = [
     { name = "0x00trace", email = "34114851+astrosteveo@users.noreply.github.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "unicorn>=2.1.4,<3",
+]
 
 [project.scripts]
 siicl = "siicl:main"
@@ -26,3 +28,8 @@ target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
