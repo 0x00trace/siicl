@@ -37,6 +37,9 @@ class Operand:
     not_: bool = False  # predicates
     reuse: bool = False
     suffix: str = ""  # such as ".H0_H0" or ".X4"
+    extra: Operand | None = None  # addr: uniform register added to the address
+    scale: int = 1  # addr: the base register is multiplied by this
+    hidden: bool = False  # kept for its meaning, but nvdisasm doesn't print it (such as a PT predicate)
 
     def core(self) -> str:
         k, v = self.kind, self.value
@@ -57,6 +60,14 @@ class Operand:
             return f"c[{self.bank:#x}][{inner}]"
         if k == "attr":
             return f"a[{v:#x}]"
+        if k == "addr":
+            return _addr_text(self)
+        if k == "himm":
+            return _f16(v)
+        if k == "brx":
+            return f"{self.index.core()} {_hex(v)}"
+        if k == "ret":
+            return f"{self.index.core()} {v:#x}"
         if k == "imm":
             return _hex(v)
         if k == "fimm":
@@ -78,6 +89,11 @@ class Operand:
 
 def _is_zero_reg(op: Operand) -> bool:
     return (op.kind == "reg" and op.value == 255) or (op.kind == "ureg" and op.value == 63)
+
+
+def _hidden_if(op: Operand, hide: bool) -> Operand:
+    op.hidden = hide
+    return op
 
 
 def _hex(v: int) -> str:
@@ -115,9 +131,10 @@ class Instruction:
         head = self.name + "".join("." + m for m in self.mods if m)
         if self.guard is not None:
             head = f"@{self.guard.core()} {head}"
-        if not self.operands:
+        shown = [op for op in self.operands if not op.hidden]
+        if not shown:
             return head
-        body = self.separator.join(op.text() for op in self.operands)
+        body = self.separator.join(op.text() for op in shown)
         if self.cbuf_space:
             body = body.replace("][", "] [")
         return (head + " " + body).rstrip()
@@ -426,9 +443,7 @@ def _ald(b: Bits) -> Instruction:
 
 @_op(0x322)
 def _ast(b: Bits) -> Instruction:
-    ops = [Operand("attr", b.f(40, 11)), b.reg(32)]
-    if b.f(64, 8) != 255:
-        ops.append(b.reg(64))
+    ops = [Operand("attr", b.f(40, 11)), b.reg(32), _hidden_if(b.reg(64), b.f(64, 8) == 255)]
     return _ins("AST", [_ATTR_SIZE[b.f(74, 2)]], ops)
 
 
@@ -442,11 +457,7 @@ def _target(b: Bits) -> Operand:
 
 @_op(0x947)
 def _bra(b: Bits) -> Instruction:
-    ops = [_target(b)]
-    p = b.pred(87, 90)
-    if not (p.value == 7 and not p.not_):
-        ops.insert(0, p)
-    return _ins("BRA", [], ops)
+    return _ins("BRA", [], _with_pred(b, [_target(b)]))
 
 
 @_op(0x945)
@@ -460,15 +471,14 @@ def _bsync(b: Bits) -> Instruction:
 
 
 def _with_pred(b: Bits, ops: list[Operand]) -> list[Operand]:
-    """Prefix the source predicate at bit 87 unless it is PT."""
+    """Prefix the source predicate at bit 87, hidden when it is PT."""
     p = b.pred(87, 90)
-    return ops if p.value == 7 and not p.not_ else [p, *ops]
+    return [_hidden_if(p, _is_pt(p)), *ops]
 
 
 @_op(0x94D)
 def _exit(b: Bits) -> Instruction:
-    p = b.pred(87, 90)
-    return _ins("EXIT", [], [] if (p.value == 7 and not p.not_) else [p])
+    return _ins("EXIT", [], _with_pred(b, []))
 
 
 @_op(0x918)
@@ -536,7 +546,7 @@ def _iadd3(b: Bits) -> Instruction:
     pr = b.upred if uniform else b.pred
     a = b.ureg(24, neg=72) if uniform else b.reg(24, neg=72, reuse=122)
     dst = b.ureg(16) if uniform else _dst(b)
-    ops = [dst] + [p for p in (pr(81), pr(84)) if not _is_pt(p)] + [a, src_b, src_c]
+    ops = [dst] + [_hidden_if(p, _is_pt(p)) for p in (pr(81), pr(84))] + [a, src_b, src_c]
     x = b.b(74)
     if x:
         ops += [pr(87, 90), pr(77, 80)]
@@ -599,7 +609,7 @@ def _lea(b: Bits) -> Instruction:
     a = b.ureg(24) if uniform else b.reg(24, neg=72, reuse=122)
     dst = b.ureg(16) if uniform else _dst(b)
     pr = b.upred if uniform else b.pred
-    ops = [dst] + [p for p in (pr(81),) if not _is_pt(p)] + [a, src_b]
+    ops = [dst] + [_hidden_if(p, _is_pt(p)) for p in (pr(81),)] + [a, src_b]
     if hi:
         ops.append(reg(64))
     ops.append(Operand("imm", b.f(75, 5)))
@@ -621,7 +631,7 @@ def _lop3(b: Bits) -> Instruction:
     pr = b.upred if uniform else b.pred
     dst = b.ureg(16) if uniform else _dst(b)
     a = b.ureg(24) if uniform else b.reg(24, reuse=122)
-    ops = [p for p in (pr(81),) if not _is_pt(p)] + [dst, a, src_b, src_c, _lut(b), pr(87, 90)]
+    ops = [_hidden_if(p, _is_pt(p)) for p in (pr(81),)] + [dst, a, src_b, src_c, _lut(b), pr(87, 90)]
     return _ins("ULOP3" if uniform else "LOP3", ["LUT"], ops)
 
 
@@ -736,9 +746,7 @@ def _vote(b: Bits) -> Instruction:
 
 @_op(0x886)
 def _voteu(b: Bits) -> Instruction:
-    ops = [b.upred(81), b.pred(87, 90)]
-    if b.f(16, 6) != 63:
-        ops.insert(0, b.ureg(16))
+    ops = [_hidden_if(b.ureg(16), b.f(16, 6) == 63), b.upred(81), b.pred(87, 90)]
     return _ins("VOTEU", [_VOTE[b.f(72, 2)]], ops)
 
 
@@ -811,13 +819,13 @@ def _bar(b: Bits) -> Instruction:
 
 @_op(0x949)
 def _brx(b: Bits) -> Instruction:
-    target = Operand("text", f"{b.reg(24).core()} {_hex(b.s(32, 50))}")
+    target = Operand("brx", b.s(32, 50), index=b.reg(24))
     return _ins("BRX", [], _with_pred(b, [target]))
 
 
 @_op(0x950)
 def _ret(b: Bits) -> Instruction:
-    target = Operand("text", f"{b.reg(24).core()} {_target(b).core()}")
+    target = Operand("ret", _target(b).value, index=b.reg(24))
     return _ins("RET", ["REL", "NODEC" if b.b(86) else ""], _with_pred(b, [target]))
 
 
@@ -828,9 +836,7 @@ def _call(b: Bits) -> Instruction:
 
 @_op(0x942)
 def _break(b: Bits) -> Instruction:
-    ops = [Operand("breg", b.f(16, 4))]
-    p = b.pred(87, 90)
-    return _ins("BREAK", [], ops if _is_pt(p) else [p] + ops)
+    return _ins("BREAK", [], _with_pred(b, [Operand("breg", b.f(16, 4))]))
 
 
 @_op(0x948)
@@ -856,7 +862,7 @@ def _f16(bits: int) -> str:
 
 
 def _himm(b: Bits) -> list[Operand]:
-    return [Operand("text", _f16(b.f(48, 16))), Operand("text", _f16(b.f(32, 16)))]
+    return [Operand("himm", b.f(48, 16)), Operand("himm", b.f(32, 16))]
 
 
 def _hcbuf(b: Bits) -> Operand:
@@ -997,8 +1003,7 @@ def _tex_ops(b: Bits, handle: str, *, with_dim: bool = True) -> list[Operand]:
     if with_dim:
         ops.append(Operand("text", _TEX_DIM[b.f(61, 3)]))
     mask = b.f(72, 4)
-    if mask != 0xF:
-        ops.append(Operand("imm", mask))
+    ops.append(_hidden_if(Operand("imm", mask), mask == 0xF))
     return ops
 
 
@@ -1078,21 +1083,26 @@ def _txq(b: Bits) -> Instruction:
     elif h == "ureg":
         ops += [b.ureg(40), Operand("imm", b.f(54, 5))]
     mask = b.f(72, 4)
-    if mask != 0xF:
-        ops.append(Operand("imm", mask))
+    ops.append(_hidden_if(Operand("imm", mask), mask == 0xF))
     return _ins("TXQ", ["NODEP" if b.b(90) else ""], ops)
 
 
 # ---------------------------------------------------------------------------
 # Memory
 
-_SCALE = {0: "", 1: ".X4", 2: ".X8", 3: ".X16"}
+_SCALE = {0: 1, 1: 4, 2: 8, 3: 16}
 
 
-def _addr(base: Operand, offset: int, *, extra: Operand | None = None, scale: str = "") -> Operand:
+def _addr(base: Operand, offset: int, *, extra: Operand | None = None, scale: int = 1) -> Operand:
+    """A memory address: base register (times scale), plus an optional uniform register, plus offset."""
+    return Operand("addr", offset, index=base, extra=extra, scale=scale)
+
+
+def _addr_text(op: Operand) -> str:
+    base, extra, offset = op.index, op.extra, op.value
     parts = []
     if not _is_zero_reg(base):
-        parts.append(base.core() + scale)
+        parts.append(base.core() + (f".X{op.scale}" if op.scale > 1 else ""))
     if extra is not None and not _is_zero_reg(extra):
         if parts:
             parts[-1] += ".U32"
@@ -1102,7 +1112,7 @@ def _addr(base: Operand, offset: int, *, extra: Operand | None = None, scale: st
         s = (s + "+" if s else "") + _hex(offset)
     elif not s:
         s = "RZ" if base.kind == "reg" else base.core()
-    return Operand("text", f"[{s}]")
+    return f"[{s}]"
 
 
 @_op(0x984)
@@ -1180,6 +1190,11 @@ _SU_DIM = ["1D", "1D_BUFFER", "1D_ARRAY", "2D", "2D_ARRAY", "3D", "?6", "?7"]
 _SU_MASK = {1: "R", 3: "RG", 7: "RGB", 15: ""}
 
 
+def _su_addr(b: Bits) -> Operand:
+    """Surface coordinates: the first of consecutive registers, one per dimension."""
+    return Operand("addr", 0, index=b.reg(24))
+
+
 def _su_handle(b: Bits) -> list[Operand]:
     return [Operand("imm", b.f(54, 5)), Operand("imm", b.f(40, 14))]
 
@@ -1195,20 +1210,20 @@ def _su_mods(b: Bits, *, op: bool = False) -> list[str]:
 
 @_op(0xB9B)
 def _sust(b: Bits) -> Instruction:
-    return _ins("SUST", _su_mods(b), [Operand("text", f"[{b.reg(24).core()}]"), b.reg(32), *_su_handle(b)])
+    return _ins("SUST", _su_mods(b), [_su_addr(b), b.reg(32), *_su_handle(b)])
 
 
 @_op(0xB97)
 def _suld(b: Bits) -> Instruction:
-    return _ins("SULD", _su_mods(b), [_dst(b), Operand("text", f"[{b.reg(24).core()}]"), *_su_handle(b)])
+    return _ins("SULD", _su_mods(b), [_dst(b), _su_addr(b), *_su_handle(b)])
 
 
 @_op(0x59F)
 def _sured(b: Bits) -> Instruction:
-    return _ins("SURED", _su_mods(b, op=True), [Operand("text", f"[{b.reg(24).core()}]"), b.reg(32), *_su_handle(b)])
+    return _ins("SURED", _su_mods(b, op=True), [_su_addr(b), b.reg(32), *_su_handle(b)])
 
 
 @_op(0x593)
 def _suatom(b: Bits) -> Instruction:
-    ops = [_dst(b), Operand("text", f"[{b.reg(24).core()}]"), b.reg(32), *_su_handle(b)]
+    ops = [_dst(b), _su_addr(b), b.reg(32), *_su_handle(b)]
     return _ins("SUATOM", _su_mods(b, op=True), ops)

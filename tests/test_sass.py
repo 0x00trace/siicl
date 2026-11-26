@@ -294,6 +294,32 @@ def test_operands_are_structured():
     assert (b.value, c.value) == (3, 4)
 
 
+def test_unprinted_operands_keep_their_place():
+    # IADD3 with both carry predicates PT: nvdisasm prints neither, but they keep their slots
+    lo, hi = Case("x", 0x210, {16: 1, 24: 2, 32: 3, 64: 4, 81: 7, 84: 1, 87: 7}, "").words
+    ins = sass.decode(lo, hi)
+    assert ins.text() == "IADD3 R1, P1, R2, R3, R4"
+    dst, p0, p1, a, b, c = ins.operands
+    assert p0.hidden and (p0.kind, p0.value) == ("pred", 7)
+    assert not p1.hidden and p1.value == 1
+    # BRA without a predicate still has one, hidden
+    lo, hi = Case("x", 0x947, {32: 0x20, 87: 7}, "").words
+    p, target = sass.decode(lo, hi).operands
+    assert p.hidden and (target.kind, target.value) == ("label", 0x30)
+
+
+def test_addresses_are_structured():
+    lo, hi = Case("x", 0x984, {16: 8, 24: 3, 40: 0x1400, 73: 6, 78: 3}, "").words
+    ins = sass.decode(lo, hi)
+    assert ins.text() == "LDS.128 R8, [R3.X16+0x1400]"
+    addr = ins.operands[1]
+    assert (addr.kind, addr.value, addr.scale, addr.index.value) == ("addr", 0x1400, 16, 3)
+    lo, hi = Case("x", 0x430, {16: 1, 24: 2, 32: 0x3C00, 48: 0xC000}, "").words
+    ins = sass.decode(lo, hi)
+    assert [(op.kind, op.value) for op in ins.operands[2:]] == [("himm", 0xC000), ("himm", 0x3C00)]
+    assert ins.text() == "HADD2 R1, R2, -2, 1"
+
+
 @pytest.mark.parametrize(
     "bits, text",
     [

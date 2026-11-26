@@ -2,6 +2,12 @@
 
 `siicl.sass` decodes NVIDIA's 128-bit GPU instruction encoding (Volta and later) as used by SM 8.6-class Ampere GPUs. `decode(lo, hi, address)` returns an `Instruction` with its mnemonic, modifiers, predicate guard and structured operands, and `Instruction.text()` prints it as `nvdisasm --binary SM86` does. A shader translator can work from the structured form; the text form exists so the decoder can be checked against NVIDIA's disassembler.
 
+Each opcode has a fixed list of operands, so a consumer can find an operand by its position:
+
+- Operands that nvdisasm leaves out stay in the list with `hidden` set. Examples are a `PT` carry predicate of `IADD3`, the `PT` predicate of an unconditional `BRA`, and a full texture write mask.
+- Memory and surface addresses are `addr` operands: a base register (`index`), its `scale`, an optional uniform register (`extra`) and a byte offset (`value`).
+- Packed-half immediates are `himm` operands holding the 16-bit value. `BRX` and `RET` targets are `brx` and `ret` operands with the register in `index`.
+
 ## Status
 
 - The decoder knows every opcode that the sample's 2,828 shader programs use: 162 opcodes, 1,627,782 instructions. `siicl vzip check-decoder` decodes all of them and compares each line with nvdisasm; all of them match.
