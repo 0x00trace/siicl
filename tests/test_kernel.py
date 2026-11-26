@@ -769,3 +769,40 @@ def test_events_signal_waiters_and_reset(tmp_path):
     end = p.run(io.StringIO(), max_seconds=1)
     assert end.reason == "exit"
     assert [p.cpu.x(n) for n in (19, 20, 21, 22)] == [0, 0, svcs.TIMED_OUT, svcs.INVALID_STATE]
+
+
+def test_transfer_memory_locks_its_pages_until_the_handle_is_closed(tmp_path):
+    p, end, _ = run(
+        tmp_path,
+        HEAP_SETUP
+        + """
+        mov x1, x19
+        mov x2, #0x1000
+        mov w3, #1
+        svc #0x15
+        mov x20, x0
+        mov w21, w1
+        sub sp, sp, #0x40
+        mov x0, sp
+        mov x2, x19
+        svc #0x06
+        ldr w22, [sp, #20]
+        ldr w23, [sp, #24]
+        mov w0, w21
+        svc #0x16
+        mov x0, sp
+        mov x2, x19
+        svc #0x06
+        ldr w24, [sp, #20]
+        ldr w25, [sp, #24]
+        mov x1, x19
+        mov x2, #0x1000
+        mov w3, #5
+        svc #0x15
+        mov x26, x0
+        svc #0x07
+        """,
+    )
+    assert end.reason == "exit", end.message
+    assert [p.cpu.x(n) for n in (20, 22, 23, 24, 25)] == [0, MemoryAttribute.LOCKED, 1, 0, 3]
+    assert p.cpu.x(26) == svcs.INVALID_NEW_MEMORY_PERMISSION

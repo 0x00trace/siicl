@@ -174,6 +174,14 @@ class SharedMemory:
         self.view = memoryview(self.memory._map)
 
 
+class TransferMemory:
+    """Memory the game lends to a service. Its pages stay locked to the permission the game keeps
+    (often none) until the handle is closed."""
+
+    def __init__(self, address: int, size: int, perm: int) -> None:
+        self.address, self.size, self.perm = address, size, perm
+
+
 class HandleTable:
     """Handles as the kernel makes them: a slot index in the low 15 bits and a serial number above it."""
 

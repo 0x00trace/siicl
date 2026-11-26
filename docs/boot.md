@@ -87,7 +87,7 @@ A thread that is switched out between an exclusive load and its exclusive store 
 - Threads: CreateThread, StartThread, ExitThread, SleepThread, GetThreadPriority, SetThreadPriority, GetThreadCoreMask, SetThreadCoreMask, GetCurrentProcessorNumber, GetThreadId, GetProcessId, CloseHandle
 - Synchronization: WaitSynchronization (on threads so far), CancelSynchronization, ArbitrateLock, ArbitrateUnlock, WaitProcessWideKeyAtomic, SignalProcessWideKey, WaitForAddress, SignalToAddress, SynchronizePreemptionState
 - IPC: ConnectToNamedPort (for "sm:"), SendSyncRequest, SendSyncRequestWithUserBuffer
-- Events and shared memory: SignalEvent, ClearEvent, ResetSignal, MapSharedMemory, UnmapSharedMemory
+- Events, shared and transfer memory: SignalEvent, ClearEvent, ResetSignal, MapSharedMemory, UnmapSharedMemory, CreateTransferMemory (the lent pages keep only the permission the game asks for, and are locked until the handle is closed)
 - Other: GetSystemTick, GetInfo (including the Switch 2's remote region and page size types), Break, OutputDebugString, ExitProcess
 
 MapMemory and SetMemoryPermission accept heap memory and the modules' .data and .bss. The SDK maps thread stacks from its .bss with MapMemory, and makes part of each module's .data read-only after relocating it.
@@ -116,6 +116,27 @@ Services so far, each with the commands the sample has used:
 | `bsd:u`, `bsd:s` | Socket clients register; nothing connects |
 | `acc:u0` | One user account |
 | `ldr:ro` | Takes the process handle |
+| Graphics supervisor | Reached with ISelfController GetGraphicsSupervisor, not through `sm:`. See below. |
+| `nvsrv` | The GPU driver service, handed out by the graphics supervisor. Nothing is implemented yet. |
+
+### The graphics supervisor
+
+The Switch 2 SDK boots its graphics system (`nn::gs::sdk::BootGraphicsSystem`) through a graphics supervisor. The applet's ISelfController command 2000 (GetGraphicsSupervisor) hands out a session for it as a copied handle. The supervisor speaks TIPC, and its client in the SDK (`nn::gsv`) writes the messages by hand. No public documentation describes its commands. This is what siicl has learned from the client code, in the order the sample sends them:
+
+| Command | Request | Response |
+|---|---|---|
+| 4 | The process ID, a u64 (0x8000000000000006 in the sample), zeros; a copy of the process handle | Result |
+| 11 | A copy of the process handle | Result |
+| 101 | Nothing | Result |
+| 1501, 1502 | Nothing (from `nn::gsv::shim::detail::InitializeInterModuleImageContext`) | Result |
+| 1402 | Nothing (from `nn::nvsrv::BootWithRemoteMemory`) | One handle: a session for the GPU driver service, `nvsrv`. Then the result. |
+| 201 | Nothing | Result |
+| 202 | Nothing | One handle, then the result. What the handle is for is not known yet. |
+| 204 | Two transfer memories (copied): 0x1000 bytes the game keeps read and write, and 0x2000 bytes it keeps read-only; arguments 1, 0x1FF and their two sizes | Two moved handles, which the client attaches as system events. Then the result. |
+
+`nvsrv` speaks CMIF. Its first command in the sample, 13, comes from `NvOsDrvAttach` with a 1 as its argument, which fits `nvdrv`'s command 13 on the Switch 1 (SetGraphicsFirmwareMemoryMarginEnabled).
+
+After command 204, the client expects the supervisor to have written a header at the start of the read-only transfer memory: a 32-bit 1, then a 32-bit value, a size below 0x1000, and five offsets into the two transfer memories. So the supervisor and the game talk through queues in that shared memory, signalled by the two events. siicl does not write that header yet, so the sample stops there.
 
 ### The time shared memory
 

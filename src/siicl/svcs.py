@@ -25,6 +25,7 @@ from siicl.kernel import (
     SharedMemory,
     SyncObject,
     Thread,
+    TransferMemory,
     Unimplemented,
 )
 from siicl.svc import SVC_NAMES
@@ -472,9 +473,12 @@ def get_process_id(p: Process, t: Thread) -> str:
 def close_handle(p: Process, t: Thread) -> str:
     handle = _w(p, 0)
     try:
+        obj = p.handles.get(handle)
         p.handles.close(handle)
     except KeyError:
         return f"(handle={handle:#x})" + _result(p, INVALID_HANDLE)
+    if isinstance(obj, TransferMemory):  # the lent pages come back
+        p.space.update(obj.address, obj.size, perm=RW, attribute=0)
     return f"(handle={handle:#x})" + _result(p, OK)
 
 
@@ -910,6 +914,27 @@ def reset_signal(p: Process, t: Thread) -> str:
         return f"(handle={handle:#x})" + _result(p, INVALID_STATE)
     event.signaled = False
     return f"(handle={handle:#x})" + _result(p, OK)
+
+
+# Memory states CreateTransferMemory may lend: the heap, physical memory and the modules' .data.
+_TRANSFERABLE = {MemoryState.NORMAL, MemoryState.CODE_DATA, MemoryState.ALIAS_CODE_DATA}
+
+
+@handles(0x15)
+def create_transfer_memory(p: Process, t: Thread) -> str:
+    address, size, perm = p.cpu.x(1), p.cpu.x(2), _w(p, 3)
+    args = f"(address={address:#x}, size={size:#x}, perm={perm_text(perm)})"
+    if (bad := _pages(address, size)) is not None:
+        return args + _result(p, bad)
+    if perm not in (0, READ, RW):
+        return args + _result(p, INVALID_NEW_MEMORY_PERMISSION)
+    blocks = _blocks(p, address, size)
+    if blocks is None or any(b.state not in _TRANSFERABLE or (b.perm, b.attribute) != (RW, 0) for b in blocks):
+        return args + _result(p, INVALID_CURRENT_MEMORY)
+    p.space.update(address, size, perm=perm, attribute=MemoryAttribute.LOCKED)
+    handle = p.handles.add(TransferMemory(address, size, perm))
+    p.cpu.set_x(1, handle)
+    return args + _result(p, OK, f", handle {handle:#x}")
 
 
 @handles(0x13)

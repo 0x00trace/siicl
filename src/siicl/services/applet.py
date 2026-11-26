@@ -10,6 +10,7 @@ from __future__ import annotations
 import struct
 
 from siicl.kernel import Event
+from siicl.services import gfx
 from siicl.services.base import Call, Service, Session, command, service, stub
 
 RESULT_NO_MESSAGE = 0x680  # applet module (128), description 3
@@ -125,10 +126,6 @@ class CommonStateGetter(Service):
     SetRtcModeChangedMessageEnabled = stub(2000, "SetRtcModeChangedMessageEnabled")
 
 
-class GraphicsSupervisor(Service):
-    name = "applet IGraphicsSupervisor"
-
-
 class SelfController(Service):
     name = "applet ISelfController"
 
@@ -165,7 +162,7 @@ class SelfController(Service):
     # sample expects a session handle back, copied, not an object in the domain.
     @command(2000)
     def GetGraphicsSupervisor(self, call: Call) -> int:
-        call.copy(Session(GraphicsSupervisor(self.process)))
+        call.copy(Session(gfx.GraphicsSupervisor(self.process)))
         return 0
 
     SetRtcScreenSharingAudioEnabled = stub(2400, "SetRtcScreenSharingAudioEnabled", "B")

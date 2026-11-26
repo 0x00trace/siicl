@@ -171,3 +171,27 @@ def test_calendar_times_and_clock_snapshots():
     assert struct.unpack_from("<hbbbbb", cal) == (2026, 1, 2, 1, 1, 1)
     assert struct.unpack_from("<II", cal, 8) == (5, 1)  # Friday, the year's second day
     assert len(time.clock_snapshot(process(), 1)) == 0xD0
+
+
+def tipc(command, data=b"", **kw):
+    return ipc.build(type=ipc.TIPC_FIRST + command, data=data, align_data=False, **kw)
+
+
+def test_the_graphics_supervisor_answers_with_the_handles_its_clients_read():
+    from siicl.services import gfx
+
+    p = process()
+    session = services.Session(gfx.GraphicsSupervisor(p))
+    text, msg = send(
+        p, session, tipc(4, struct.pack("<QQ", 0x51, 0x8000000000000006) + bytes(32), copy_handles=[0xFFFF8001])
+    )
+    assert text == "gsv IGraphicsSupervisor command 4 (boot)(process ID 0x51, 0x8000000000000006)"
+    assert (msg.move_handles, struct.unpack_from("<I", msg.data)[0]) == ([], 0)
+    _, msg = send(p, session, tipc(1402))
+    assert isinstance(p.handles.get(msg.move_handles[0]).obj, gfx.NvService)
+    # 204: two moved handles, then the result, at offsets 12, 16 and 20 of the response
+    _, msg = send(p, session, tipc(204, bytes(24), copy_handles=[1, 2]))
+    raw = p.cpu.read(p.main_thread.tls, 24)
+    assert struct.unpack_from("<III", raw, 12) == (msg.move_handles[0], msg.move_handles[1], 0)
+    _, msg = send(p, session, tipc(201))
+    assert struct.unpack_from("<I", p.cpu.read(p.main_thread.tls, 12), 8)[0] == 0 and not msg.move_handles
