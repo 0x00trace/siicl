@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Game content, and anything taken from it, must never be committed.
+# See CLAUDE.md. The pre-commit hook in .githooks/ enforces this.
+*.nup
+*.nsp
+*.nsz
+*.xci
+*.xcz
+*.nca
+*.ncz
+*.nso
+*.nro
+*.npdm
+*.kip
+*.zip
+*.bin
+*.keys
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+*.bmp
+*.tga
+*.dds
+*.mp4
+*.mkv
+*.webm
+*.avi
+*.mov
+*.wav
+*.ogg
+*.flac
+*.mp3
+/out/
+/dumps/
+/extracted/
+/reports/

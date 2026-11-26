@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Refuse a commit that would add game content to this repository.
+
+The rule in CLAUDE.md: no game files, nothing extracted from them, and no
+screenshots, video or audio of a game. This hook checks every staged file by
+name, by size and by its first bytes. Enable it in each clone with:
+
+    git config core.hooksPath .githooks
+"""
+
+import subprocess
+import sys
+
+MAX_SIZE = 512 * 1024
+
+BLOCKED_SUFFIXES = {
+    ".nup", ".nsp", ".nsz", ".xci", ".xcz", ".nca", ".ncz", ".nso", ".nro",
+    ".npdm", ".kip", ".zip", ".bin", ".keys",
+    ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tga", ".dds",
+    ".mp4", ".mkv", ".webm", ".avi", ".mov", ".wav", ".ogg", ".flac", ".mp3",
+}
+
+# (offset, magic bytes, what it is)
+BLOCKED_MAGICS = [
+    (0, b"NUP", "NUP container"),
+    (0, b"NSO0", "NSO executable"),
+    (0x10, b"NRO0", "NRO executable"),
+    (0, b"META", "NPDM process descriptor"),
+    (0x200, b"NCA3", "NCA content archive"),
+    (0x200, b"NCA4", "NCA content archive"),
+    (0, b"PFS0", "PFS0 archive"),
+    (0, b"HFS0", "HFS0 archive"),
+    (0, b"VZIP", "VZIP archive"),
+    (0, b"PK\x03\x04", "ZIP archive"),
+    (0, b"\x28\xb5\x2f\xfd", "zstd data"),
+    (0, b"\x04\x22\x4d\x18", "LZ4 data"),
+    (0, b"\x7fELF", "ELF binary"),
+    (0, b"\xff\xd8\xff", "JPEG image"),
+    (0, b"\x89PNG", "PNG image"),
+    (0, b"GIF8", "GIF image"),
+    (0, b"RIFF", "RIFF media (WebP, WAV or AVI)"),
+    (0, b"\x1a\x45\xdf\xa3", "Matroska or WebM video"),
+    (4, b"ftyp", "MP4 or MOV video"),
+    (0, b"OggS", "Ogg audio"),
+    (0, b"fLaC", "FLAC audio"),
+    (0, b"ID3", "MP3 audio"),
+]
+
+
+def staged_paths():
+    out = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR"],
+        check=True, capture_output=True,
+    ).stdout
+    return [p.decode() for p in out.split(b"\0") if p]
+
+
+def staged_blob(path):
+    return subprocess.run(["git", "show", f":{path}"], check=True, capture_output=True).stdout
+
+
+def problem(path, data):
+    lower = path.lower()
+    for suffix in BLOCKED_SUFFIXES:
+        if lower.endswith(suffix):
+            return f"file type {suffix} is not allowed"
+    if len(data) > MAX_SIZE:
+        return f"{len(data)} bytes is over the {MAX_SIZE}-byte limit"
+    for offset, magic, what in BLOCKED_MAGICS:
+        if data[offset:offset + len(magic)] == magic:
+            return f"content looks like {what}"
+    return None
+
+
+def main():
+    refused = []
+    for path in staged_paths():
+        reason = problem(path, staged_blob(path))
+        if reason:
+            refused.append((path, reason))
+    if refused:
+        print("pre-commit: refused. This repository must not contain game content (see CLAUDE.md).", file=sys.stderr)
+        for path, reason in refused:
+            print(f"  {path}: {reason}", file=sys.stderr)
+        print("Unstage these files with: git restore --staged <file>", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
