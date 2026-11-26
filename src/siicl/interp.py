@@ -353,6 +353,7 @@ class Launch:
 class Result:
     instructions: int  # thread-instructions executed
     workgroups: int
+    executed: set[int] = field(default_factory=set)  # addresses of the instructions that ran
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +474,7 @@ def run(program: Program, launch: Launch, *, step_limit: int = DEFAULT_STEP_LIMI
             code.append(_raiser(Unsupported(str(err))))
     info = program.info
     steps = 0
+    executed: set[int] = set()
     gx, gy, gz = launch.grid
     ctas = [(x, y, z) for z in range(gz) for y in range(gy) for x in range(gx)]
     for ctaid in reversed(ctas) if reverse else ctas:
@@ -481,8 +483,8 @@ def run(program: Program, launch: Launch, *, step_limit: int = DEFAULT_STEP_LIMI
             cta.warps.reverse()
             for w in cta.warps:
                 w.threads.reverse()
-        steps = _run_cta(cta, code, program.instructions, steps, step_limit, max if reverse else min)
-    return Result(steps, len(ctas))
+        steps = _run_cta(cta, code, program.instructions, steps, step_limit, max if reverse else min, executed)
+    return Result(steps, len(ctas), {pc * INSTRUCTION_SIZE for pc in executed})
 
 
 def _raiser(err: Exception) -> Step:
@@ -492,7 +494,9 @@ def _raiser(err: Exception) -> Step:
     return step
 
 
-def _run_cta(cta: Cta, code: list[Step], ins: list[sass.Instruction], steps: int, limit: int, pick=min) -> int:
+def _run_cta(
+    cta: Cta, code: list[Step], ins: list[sass.Instruction], steps: int, limit: int, pick, executed: set[int]
+) -> int:
     n = len(code)
     while True:
         for warp in cta.warps:
@@ -506,6 +510,7 @@ def _run_cta(cta: Cta, code: list[Step], ins: list[sass.Instruction], steps: int
                 if pc >= n:
                     raise ExecutionError(f"a thread ran past the end of the program at {pc * INSTRUCTION_SIZE:#x}")
                 group = [t for t in runnable if t.pc == pc]
+                executed.add(pc)
                 try:
                     code[pc](group, warp)
                 except (Unsupported, ExecutionError) as err:
