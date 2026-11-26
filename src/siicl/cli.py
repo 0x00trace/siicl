@@ -12,7 +12,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from siicl import a64scan, npdm, nso, nup, nvshader, paths, vipr, vzip
+from siicl import a64scan, npdm, nso, nup, nvshader, paths, sass, vipr, vzip
 from siicl.report import ModuleScan, Report, to_dict, to_markdown
 
 EXEFS_MODULES = (
@@ -332,11 +332,66 @@ def cmd_vzip_disasm(args: argparse.Namespace) -> int:
             f"multiple render targets {'yes' if h.mrt_enable else 'no'}, "
             f"may discard pixels {'yes' if h.kills_pixels else 'no'}"
         )
+    if args.decoder == "siicl":
+        failed = 0
+        for i in range(len(code) // nvshader.INSTRUCTION_SIZE):
+            lo, hi = struct.unpack_from("<QQ", code, i * nvshader.INSTRUCTION_SIZE)
+            try:
+                text = sass.decode(lo, hi, i * nvshader.INSTRUCTION_SIZE).text()
+            except sass.UnknownInstruction as err:
+                text, failed = f"<unknown: {err}>", failed + 1
+            print(f"        /*{i * nvshader.INSTRUCTION_SIZE:04x}*/  {text} ;")
+        return 1 if failed else 0
     dis = nvshader.disassemble(code, args.arch)
     print(dis.text, end="")
     for err in dis.errors:
         print(f"siicl: {err}", file=sys.stderr)
     return 1 if dis.errors else 0
+
+
+def _check_program(code: bytes, arch: str) -> list[tuple[int, bool, str, str]]:
+    """(opcode, matches, nvdisasm text, decoder text) for each instruction of one program."""
+    want = nvshader.disassembly_lines(nvshader.disassemble(code, arch).text)
+    out = []
+    for i in range(len(code) // nvshader.INSTRUCTION_SIZE):
+        lo, hi = struct.unpack_from("<QQ", code, i * nvshader.INSTRUCTION_SIZE)
+        try:
+            got = sass.decode(lo, hi, i * nvshader.INSTRUCTION_SIZE).text()
+        except sass.UnknownInstruction:
+            got = "<unknown opcode>"
+        w = want.get(i, "<no nvdisasm output>")
+        out.append((lo & 0xFFF, got == w, w, got))
+    return out
+
+
+def cmd_vzip_check_decoder(args: argparse.Namespace) -> int:
+    with vzip.VzipReader.open(args.file) as r:
+        programs = [
+            nvshader.parse(r.read(e)).program_bytes() for e in r.unique_data() if r.head(e, 4) == nvshader.MAGIC_BYTES
+        ]
+    total: Counter[int] = Counter()
+    matched: Counter[int] = Counter()
+    examples: dict[int, list[tuple[str, str]]] = {}
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        for rows in pool.map(lambda c: _check_program(c, args.arch), programs):
+            for op, ok, want, got in rows:
+                total[op] += 1
+                if ok:
+                    matched[op] += 1
+                elif len(examples.setdefault(op, [])) < args.show:
+                    examples[op].append((want, got))
+    n, m = total.total(), matched.total()
+    print(
+        f"{m:,} of {n:,} instructions in {len(programs):,} programs decode exactly as "
+        f"nvdisasm --binary {args.arch} prints them ({100 * m / max(n, 1):.4f}%)"
+    )
+    print(f"Opcodes: {len(total):,} used, {sum(1 for o in total if matched[o] == total[o]):,} fully matched")
+    for op, count in total.most_common():
+        if matched[op] < count:
+            print(f"  0x{op:03x} {nvshader.opcode_name(op)}: {matched[op]:,} of {count:,}")
+            for want, got in examples.get(op, []):
+                print(f"      nvdisasm: {want}\n      siicl:    {got}")
+    return 0 if m == n else 1
 
 
 def cmd_vzip_buffers(args: argparse.Namespace) -> int:
@@ -461,7 +516,18 @@ def build_parser() -> argparse.ArgumentParser:
     v_dis.add_argument("file")
     v_dis.add_argument("entry", help="an entry name, or an asset path")
     v_dis.add_argument("--arch", default="SM86", help="SM version for nvdisasm (default SM86)")
+    v_dis.add_argument(
+        "--decoder",
+        choices=["nvdisasm", "siicl"],
+        default="nvdisasm",
+        help="print nvdisasm's output (default) or siicl's own decoder",
+    )
     v_dis.set_defaults(func=cmd_vzip_disasm)
+    v_chk = vsub.add_parser("check-decoder", help="compare siicl's instruction decoder with nvdisasm on every program")
+    v_chk.add_argument("file")
+    v_chk.add_argument("--arch", default="SM86", help="SM version for nvdisasm (default SM86)")
+    v_chk.add_argument("--show", type=int, default=3, help="mismatches to show per opcode (default 3)")
+    v_chk.set_defaults(func=cmd_vzip_check_decoder)
     v_buf = vsub.add_parser("buffers", help="match GPU data entries to the resources that own them")
     v_buf.add_argument("file")
     v_buf.add_argument("--list", action="store_true", help="also list each matched buffer")

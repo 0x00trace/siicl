@@ -8,6 +8,7 @@ is described in docs/shader-format.md.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -193,3 +194,16 @@ def disassemble(code: bytes, arch: str = "SM86", *, nvdisasm: str | None = None)
     if proc.returncode and not errors:
         errors.append(f"nvdisasm exited with status {proc.returncode}")
     return Disassembly(proc.stdout, errors)
+
+
+_LINE = re.compile(r"^\s+/\*([0-9a-f]{4,})\*/\s+(.*?)\s*;\s*$")
+
+
+def disassembly_lines(text: str) -> dict[int, str]:
+    """Instruction text from nvdisasm output, by instruction index (address / 16)."""
+    out = {}
+    for line in text.splitlines():
+        m = _LINE.match(line)
+        if m:
+            out[int(m.group(1), 16) // INSTRUCTION_SIZE] = m.group(2)
+    return out

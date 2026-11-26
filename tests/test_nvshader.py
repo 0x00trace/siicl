@@ -142,3 +142,20 @@ def test_cli_disasm_and_nvdisasm_check(tmp_path, capsys):
     assert "MOV R2, 0x3f000000" in out
     assert cli.main(["vzip", "shaders", str(p), "--nvdisasm", "SM86"]) == 0
     assert "SM86: 1 of 1 programs decode without errors" in capsys.readouterr().out
+
+
+def test_cli_disasm_with_siicl_decoder(tmp_path, capsys):
+    p = tmp_path / "a.zip"
+    p.write_bytes(build_vzip([("abc", _real_program(), True)]))
+    assert cli.main(["vzip", "disasm", str(p), "abc", "--decoder", "siicl"]) == 0
+    out = capsys.readouterr().out
+    assert "/*0000*/  MOV R2, 0x3f000000 ;" in out
+    assert "/*0020*/  BRA 0x20 ;" in out
+
+
+@needs_nvdisasm
+def test_cli_check_decoder(tmp_path, capsys):
+    p = tmp_path / "a.zip"
+    p.write_bytes(build_vzip([("abc", _real_program(), True)]))
+    assert cli.main(["vzip", "check-decoder", str(p)]) == 0
+    assert "3 of 3 instructions in 1 programs decode exactly" in capsys.readouterr().out

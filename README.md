@@ -21,7 +21,8 @@ Reports go to `~/.cache/siicl/<title id>/` as `report.md` and `report.json`.
   - `verify`: decompresses every entry and checks its CRC-32
   - `grep`: lists entries whose data contains a byte pattern
   - `shaders`: checks and summarises the compiled GPU shader binaries (`--nvdisasm SM86` also decodes each one)
-  - `disasm`: disassembles one shader binary with NVIDIA's `nvdisasm`
+  - `disasm`: disassembles one shader binary with NVIDIA's `nvdisasm`, or with siicl's own decoder (`--decoder siicl`)
+  - `check-decoder`: compares siicl's instruction decoder with `nvdisasm` on every shader program
   - `buffers`: matches GPU data entries, such as shader binaries, to the resources that own them
 
 ## Requirements
@@ -54,3 +55,4 @@ git config core.hooksPath .githooks
 - [docs/nup-format.md](docs/nup-format.md): the NUP container, as worked out from a sample
 - [docs/vzip-format.md](docs/vzip-format.md): the VZIP archive in a NUP container's romfs
 - [docs/shader-format.md](docs/shader-format.md): the compiled GPU shader binaries in a VZIP archive
+- [docs/sass-decoder.md](docs/sass-decoder.md): the GPU instruction decoder and the encoding it reads

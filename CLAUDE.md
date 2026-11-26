@@ -18,7 +18,7 @@ Never commit game files or anything taken from them. This covers dumps, extracte
 - Lint and format: `uvx ruff check` and `uvx ruff format`
 - Describe a dump: `uv run siicl info <file.nup>`
 - Scan a dump: `uv run siicl scan <file.nup>`
-- Read the game data archive: `uv run siicl vzip stats|list|paths|extract|verify|grep|shaders|disasm|buffers <file.nup>`
+- Read the game data archive: `uv run siicl vzip stats|list|paths|extract|verify|grep|shaders|disasm|buffers|check-decoder <file.nup>`
 
 ## Environment
 
