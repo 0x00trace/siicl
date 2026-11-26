@@ -1,0 +1,28 @@
+[project]
+name = "siicl"
+version = "0.1.0"
+description = "Research tools toward a Switch 2 compatibility layer for Linux"
+readme = "README.md"
+authors = [
+    { name = "0x00trace", email = "34114851+astrosteveo@users.noreply.github.com" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+siicl = "siicl:main"
+
+[build-system]
+requires = ["uv_build>=0.13.10,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
