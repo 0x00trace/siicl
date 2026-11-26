@@ -6,9 +6,10 @@ import argparse
 import json
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
-from siicl import a64scan, npdm, nso, nup, paths, vzip
+from siicl import a64scan, npdm, nso, nup, nvshader, paths, vzip
 from siicl.report import ModuleScan, Report, to_dict, to_markdown
 
 EXEFS_MODULES = (
@@ -243,6 +244,66 @@ def _run_pass(args: argparse.Namespace, pattern: bytes | None) -> vzip.PassResul
     return vzip.check_archive(args.file, jobs=args.jobs, pattern=pattern, progress=progress)
 
 
+def cmd_vzip_shaders(args: argparse.Namespace) -> int:
+    stages: Counter[str] = Counter()
+    ops: Counter[int] = Counter()
+    checks: Counter[str] = Counter()
+    counts: list[int] = []
+    total_bytes = 0
+    uldc_programs = 0
+    problems: list[tuple[str, str]] = []
+    rows = []
+    with vzip.VzipReader.open(args.file) as r:
+        for e in r.unique_data():
+            if r.head(e, 4) != nvshader.MAGIC_BYTES:
+                continue
+            data = r.read(e)
+            total_bytes += len(data)
+            try:
+                sh = nvshader.parse(data)
+                insns = sh.instructions()
+            except nvshader.ShaderError as err:
+                problems.append((e.name, str(err)))
+                continue
+            stages[sh.stage] += 1
+            counts.append(len(insns))
+            these = [nvshader.opcode(lo) for lo, _ in insns]
+            ops.update(these)
+            uldc_programs += nvshader.OP_ULDC in these
+            checks["control"] += sh.control_magic_ok
+            checks["reserved"] += all(hi >> 62 == 0 for _, hi in insns)
+            if sh.header and sh.stage == "fragment":
+                checks["fragment"] += 1
+                checks["kill"] += sh.header.kills_pixels == (nvshader.OP_KILL in these)
+            rows.append((e.name, sh.stage, len(insns)))
+    n = len(counts)
+    if args.list:
+        for name, stage, count in rows:
+            print(f"{name:<17} {stage:<24} {count:>7,} instructions")
+        print()
+    print(f"Shader binaries: {n + len(problems):,} ({total_bytes / (1 << 20):.1f} MiB)")
+    for stage, count in stages.most_common():
+        print(f"  {stage:<24} {count:>7,}")
+    if counts:
+        counts.sort()
+        print(f"Instructions: {sum(counts):,} (median {counts[n // 2]:,} per program, largest {counts[-1]:,})")
+    print("Checks:")
+    print(f"  header sizes match, and the program ends with EXIT and a BRA to itself: {n:,} of {n + len(problems):,}")
+    print(f"  control section starts with 0x98761234: {checks['control']:,} of {n:,}")
+    print(f"  reserved bits 126-127 are zero in every instruction: {checks['reserved']:,} of {n:,}")
+    print(
+        f"  KILL appears exactly when the header allows discarding pixels: {checks['kill']:,} of "
+        f"{checks['fragment']:,} fragment programs"
+    )
+    print(f"Uniform-register loads (ULDC, Turing and later): {ops[nvshader.OP_ULDC]:,} in {uldc_programs:,} programs")
+    print("Most common opcodes:")
+    for op, count in ops.most_common(args.top):
+        print(f"  {nvshader.opcode_name(op):<8} 0x{op:03x} {count:>10,}")
+    for name, err in problems[:20]:
+        print(f"problem: {name}: {err}")
+    return 1 if problems else 0
+
+
 def cmd_vzip_verify(args: argparse.Namespace) -> int:
     res = _run_pass(args, None)
     print(f"Checked {res.checked:,} files ({_gib(res.bytes)}): {len(res.failures):,} failed")
@@ -308,6 +369,11 @@ def build_parser() -> argparse.ArgumentParser:
     v_paths.add_argument("file")
     v_paths.add_argument("--out", help="output file (default ~/.cache/siicl/<title id>/vzip-paths.tsv)")
     v_paths.set_defaults(func=cmd_vzip_paths)
+    v_sh = vsub.add_parser("shaders", help="check and summarise the compiled GPU shader binaries")
+    v_sh.add_argument("file")
+    v_sh.add_argument("--list", action="store_true", help="also list each binary")
+    v_sh.add_argument("--top", type=int, default=20, help="opcodes to show (default 20)")
+    v_sh.set_defaults(func=cmd_vzip_shaders)
     v_ver = vsub.add_parser("verify", help="decompress every entry and check its CRC-32")
     v_ver.add_argument("file")
     v_ver.add_argument("--jobs", type=int, default=8, help="worker processes (default 8)")

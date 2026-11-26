@@ -20,6 +20,7 @@ Reports go to `~/.cache/siicl/<title id>/` as `report.md` and `report.json`.
   - `extract`: writes chosen entries (by name, path or file type) to a folder outside the repository
   - `verify`: decompresses every entry and checks its CRC-32
   - `grep`: lists entries whose data contains a byte pattern
+  - `shaders`: checks and summarises the compiled GPU shader binaries
 
 ## Requirements
 
@@ -49,3 +50,4 @@ git config core.hooksPath .githooks
 
 - [docs/nup-format.md](docs/nup-format.md): the NUP container, as worked out from a sample
 - [docs/vzip-format.md](docs/vzip-format.md): the VZIP archive in a NUP container's romfs
+- [docs/shader-format.md](docs/shader-format.md): the compiled GPU shader binaries in a VZIP archive
