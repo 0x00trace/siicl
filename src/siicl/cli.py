@@ -126,8 +126,8 @@ def cmd_boot(args: argparse.Namespace) -> int:
         print(
             f"siicl boot log for {source.name}" + (f", title {title_id:016X}" if title_id is not None else ""), file=log
         )
-        stop = boot.boot(process, log, max_instructions=args.max_instructions)
-    print(f"stopped: {boot.describe_stop(process, stop)}")
+        end = boot.boot(process, log, max_seconds=args.seconds)
+    print(f"stopped at {process.seconds:.6f} s: {boot.describe_end(process, end)}")
     print(f"Wrote {log_path}", file=sys.stderr)
     return 0
 
@@ -582,10 +582,7 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("file", help="a NUP container, or a folder that holds exefs files")
     bt.add_argument("--out", help="output folder for boot.log (default ~/.cache/siicl/<title id>)")
     bt.add_argument(
-        "--max-instructions",
-        type=int,
-        default=10_000_000_000,
-        help="stop after this many guest instructions (default 10,000,000,000)",
+        "--seconds", type=float, default=60.0, help="stop after this much guest time, in seconds (default 60)"
     )
     bt.set_defaults(func=cmd_boot)
 

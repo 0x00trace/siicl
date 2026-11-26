@@ -28,7 +28,9 @@ def assemble(source: str, workdir: Path) -> bytes:
     """Assemble AArch64 source and return the raw bytes of its .text section."""
     src, obj, out = workdir / "t.s", workdir / "t.o", workdir / "t.bin"
     src.write_text(".text\n" + source + "\n")
-    subprocess.run([AS, f"-march={MARCH}", "-o", str(obj), str(src)], check=True, capture_output=True)
+    done = subprocess.run([AS, f"-march={MARCH}", "-o", str(obj), str(src)], capture_output=True, text=True)
+    if done.returncode:
+        raise ValueError(f"the assembler refused the test program:\n{done.stderr}")
     subprocess.run([OBJCOPY, "-O", "binary", "-j", ".text", str(obj), str(out)], check=True)
     return out.read_bytes()
 

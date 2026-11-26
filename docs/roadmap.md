@@ -34,7 +34,7 @@ The image must come from the game's own GPU commands. If the first image the gam
 
 Each stage is a stack of pull requests. Each ends at a point that both the tests and the sample can check.
 
-Status: stage 1 is done. On the sample, rtld relocates itself and stops at its first SVC, a QueryMemory call. See [boot.md](boot.md).
+Status: stages 1 and 2 are done. On the sample, rtld relocates the modules, the SDK's startup code reads the address space layout, and the run stops when the game connects to the service manager port (`sm:`). See [boot.md](boot.md).
 
 | Stage | Work | Done when |
 |---|---|---|

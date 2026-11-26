@@ -85,4 +85,41 @@ def test_query_returns_the_block_or_the_free_gap_around_an_address():
     gap = space.query(BASE + 0x2000)
     assert (gap.start, gap.size, gap.state, gap.perm) == (BASE + 0x1000, 0x2000, MemoryState.FREE, 0)
     assert space.query(0).start == 0 and space.query(0).end == BASE
-    assert space.query(BASE + 0x5000).end == 1 << 64
+    space_end = addrspace.LAYOUT_39BIT.space.end
+    assert space.query(BASE + 0x5000).end == space_end
+    beyond = space.query(space_end + 0x1000)
+    assert (beyond.start, beyond.end, beyond.state) == (space_end, 1 << 64, MemoryState.INACCESSIBLE)
+
+
+def test_query_merges_neighbours_that_look_the_same():
+    space = new_space()
+    space.map(BASE, 0x1000, READ | WRITE, MemoryState.NORMAL, "heap")
+    space.map(BASE + 0x1000, 0x2000, READ | WRITE, MemoryState.NORMAL, "heap")
+    space.map(BASE + 0x3000, 0x1000, READ, MemoryState.NORMAL, "heap")
+    merged = space.query(BASE + 0x1800)
+    assert (merged.start, merged.size) == (BASE, 0x3000)
+
+
+def test_update_and_unmap_split_blocks_and_keep_their_memory():
+    space = new_space()
+    space.map(BASE, 0x4000, READ | WRITE, MemoryState.NORMAL, "heap")
+    space.cpu.write(BASE + 0x3000, b"kept")
+    space.update(BASE + 0x1000, 0x1000, perm=READ)
+    assert [(b.start - BASE, b.size, b.perm) for b in space.blocks] == [
+        (0, 0x1000, READ | WRITE),
+        (0x1000, 0x1000, READ),
+        (0x2000, 0x2000, READ | WRITE),
+    ]
+    space.unmap(BASE + 0x2000, 0x1000)
+    assert space.cpu.read(BASE + 0x3000, 4) == b"kept"
+    assert space.free_ranges(BASE, 0x4000) == [addrspace.Range(BASE + 0x2000, 0x1000)]
+    with pytest.raises(addrspace.AddressSpaceError, match="not mapped all the way"):
+        space.range(BASE, 0x4000)
+
+
+def test_two_ranges_can_share_memory():
+    space = new_space()
+    heap = space.map(BASE, 0x2000, READ | WRITE, MemoryState.NORMAL, "heap")
+    space.map(BASE + 0x10000, 0x1000, READ | WRITE, MemoryState.STACK, "alias", memory=heap.memory, offset=0x1000)
+    space.cpu.write(BASE + 0x1008, b"shared")
+    assert space.cpu.read(BASE + 0x10008, 6) == b"shared"

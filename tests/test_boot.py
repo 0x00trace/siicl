@@ -23,10 +23,17 @@ START = """
     svc #0x01
 """
 
+CONNECT = """
+    adr x1, name
+    svc #0x1f
+name:
+    .asciz "sm:"
+"""
+
 
 def process(tmp_path, rtld_source, **extra):
     mods = {"rtld": build_nso(assemble(rtld_source, tmp_path), bss=0), **extra}
-    return kernel.Process(mods, npdm_mod.parse(build_npdm()))
+    return kernel.Process(mods, npdm_mod.parse(build_npdm(svcs=range(1, 0x81))))
 
 
 def test_main_thread_starts_at_rtld_with_the_registers_the_system_gives_it(tmp_path):
@@ -37,7 +44,9 @@ def test_main_thread_starts_at_rtld_with_the_registers_the_system_gives_it(tmp_p
     assert (p.cpu.x(2), p.cpu.x(3), p.cpu.x(6)) == (0, t.handle, BASE + 0x10)
     assert t.handle == 0x8000 and p.handles.get(t.handle) is t
     assert p.cpu.x(4) == t.tls and LAYOUT.kernel_map.contains(t.tls, kernel.TLS_SIZE)
-    assert p.cpu.x(5) == t.stack.end and t.stack.size == 0x100000 and LAYOUT.stack.contains(t.stack.start)
+    stack = p.space.query(t.stack_top - 1)
+    assert p.cpu.x(5) == t.stack_top == stack.end
+    assert (stack.size, stack.state) == (0x100000, MemoryState.STACK) and LAYOUT.stack.contains(stack.start)
     assert (t.priority, t.core) == (44, 0)
     assert p.space.query(t.tls).state == MemoryState.THREAD_LOCAL
     assert p.cpu.read(t.tls, kernel.TLS_SIZE) == bytes(kernel.TLS_SIZE)
@@ -79,36 +88,48 @@ two:
 def test_boot_log_names_the_stop_and_walks_the_frame_pointers(tmp_path):
     p = process(tmp_path, FAULT, main=build_nso(b"\0" * 4))
     log = io.StringIO()
-    stop = boot.boot(p, log, max_instructions=1000)
+    end = boot.boot(p, log, max_seconds=1)
     text = log.getvalue()
-    assert (stop.reason, stop.address) == ("fault", 0x40)
-    assert "stopped: unmapped read at 0x40, by the instruction at rtld+0x28" in text
-    assert [p.describe_address(a) for a, _ in boot.backtrace(p, stop.pc)] == ["rtld+0x28", "rtld+0x1c", "rtld+0xc"]
+    assert (end.reason, end.stop.address) == ("crash", 0x40)
+    assert "the game crashed: unmapped read at 0x40, by the instruction at rtld+0x28 (0x8000028), in thread 0" in text
+    assert [p.describe_address(a) for a, _ in boot.backtrace(p, end.stop.pc)] == ["rtld+0x28", "rtld+0x1c", "rtld+0xc"]
     assert "rtld+0x1c (link register)" in text
     assert f"  rtld     {BASE:#012x}-{BASE + 0x3000:#012x}" in text
     assert "r-x code         rtld .text" in text
     assert "main thread: handle 0x8000, entry rtld+0x0" in text
+    assert "thread 0 (id 0x100, handle 0x8000, priority 44, core 0): runnable, at rtld+0x28" in text
 
 
-def test_boot_stops_when_the_instruction_budget_runs_out(tmp_path):
+def test_boot_stops_at_the_time_limit(tmp_path):
     p = process(tmp_path, "1: b 1b")
-    stop = boot.boot(p, io.StringIO(), max_instructions=500)
-    assert stop.reason == "limit"
+    end = boot.boot(p, io.StringIO(), max_seconds=0.001)
+    assert (end.reason, end.message) == ("time", "the time limit of 0.001 s of guest time was reached")
+
+
+def test_boot_log_lists_each_svc_and_the_one_that_is_missing(tmp_path):
+    log = io.StringIO()
+    end = boot.boot(process(tmp_path, "mov x1, #0x200000\nsvc #0x01\n" + CONNECT), log, max_seconds=1)
+    text = log.getvalue()
+    assert end.reason == "unimplemented"
+    assert "t0  SetHeapSize(size=0x200000) -> ok, heap at 0x2000000000" in text
+    assert 'SVC 0x1F (ConnectToNamedPort) to port "sm:" is not implemented, at rtld+0xc' in text
+    assert "        1 SetHeapSize" in text
 
 
 def test_boot_command_writes_the_log_outside_the_repo(tmp_path, capsys):
     container = build_nup(
         [
-            ("exefs/rtld", build_nso(assemble(START, tmp_path), bss=0), True),
+            ("exefs/rtld", build_nso(assemble(CONNECT, tmp_path), bss=0), True),
             ("exefs/main", build_nso(b"\0" * 4), True),
-            ("exefs/main.npdm", build_npdm(), True),
+            ("exefs/main.npdm", build_npdm(svcs=(0x1F,)), True),
         ]
     )
     src = tmp_path / "game.nup"
     src.write_bytes(container)
     out = tmp_path / "out"
     assert cli.main(["boot", str(src), "--out", str(out)]) == 0
-    assert "stopped: SVC 0x01 (SetHeapSize) at rtld+0x14" in capsys.readouterr().out
+    expected = 'SVC 0x1F (ConnectToNamedPort) to port "sm:" is not implemented, at rtld+0x4 (0x8000004), in thread 0'
+    assert expected in capsys.readouterr().out
     text = (out / "boot.log").read_text()
     assert text.startswith("siicl boot log for game.nup, title 0400000000001000")
-    assert "stopped: SVC 0x01 (SetHeapSize) at rtld+0x14" in text
+    assert expected in text

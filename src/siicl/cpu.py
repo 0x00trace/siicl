@@ -100,6 +100,11 @@ class Cpu:
         _check_pages(address, size)
         self.uc.mem_map(address, size, perm)
 
+    def map_host(self, address: int, size: int, perm: int, host_address: int) -> None:
+        """Map guest pages straight onto host memory at host_address, which must stay allocated."""
+        _check_pages(address, size)
+        self.uc.mem_map_ptr(address, size, perm, host_address)
+
     def protect(self, address: int, size: int, perm: int) -> None:
         _check_pages(address, size)
         self.uc.mem_protect(address, size, perm)
@@ -171,6 +176,13 @@ class Cpu:
     @tpidr_el0.setter
     def tpidr_el0(self, value: int) -> None:
         self.uc.reg_write(a64.UC_ARM64_REG_TPIDR_EL0, value)
+
+    def save_context(self) -> object:
+        """The registers, system registers included, as an object restore_context() takes back."""
+        return self.uc.context_save()
+
+    def restore_context(self, context: object) -> None:
+        self.uc.context_restore(context)
 
     # Running
 
