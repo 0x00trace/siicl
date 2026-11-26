@@ -189,9 +189,47 @@ def test_the_graphics_supervisor_answers_with_the_handles_its_clients_read():
     assert (msg.move_handles, struct.unpack_from("<I", msg.data)[0]) == ([], 0)
     _, msg = send(p, session, tipc(1402))
     assert isinstance(p.handles.get(msg.move_handles[0]).obj, gfx.NvService)
-    # 204: two moved handles, then the result, at offsets 12, 16 and 20 of the response
-    _, msg = send(p, session, tipc(204, bytes(24), copy_handles=[1, 2]))
-    raw = p.cpu.read(p.main_thread.tls, 24)
-    assert struct.unpack_from("<III", raw, 12) == (msg.move_handles[0], msg.move_handles[1], 0)
     _, msg = send(p, session, tipc(201))
     assert struct.unpack_from("<I", p.cpu.read(p.main_thread.tls, 12), 8)[0] == 0 and not msg.move_handles
+
+
+def test_the_supervisor_writes_its_queue_header_and_keeps_the_transfer_memories():
+    from siicl.kernel import TransferMemory
+    from siicl.services import gfx
+
+    p = process()
+    p.space.map(0x1000_0000, 0x3000, 3, 5, "lent")
+    shared, server = TransferMemory(0x1000_0000, 0x1000, 3), TransferMemory(0x1000_1000, 0x2000, 1)
+    handles = [p.handles.add(shared), p.handles.add(server)]
+    session = services.Session(gfx.GraphicsSupervisor(p))
+    _, msg = send(p, session, tipc(204, struct.pack("<IIQQ", 1, 0x1FF, 0x1000, 0x2000), copy_handles=handles))
+    raw = p.cpu.read(p.main_thread.tls, 24)  # two moved handles, then the result, at offsets 12, 16 and 20
+    assert struct.unpack_from("<III", raw, 12) == (msg.move_handles[0], msg.move_handles[1], 0)
+    assert struct.unpack("<8I", p.cpu.read(0x1000_1000, 32)) == gfx.QUEUE_HEADER
+    assert shared.kept and server.kept
+
+
+def test_supervisor_sessions_hand_out_events_and_signal_them():
+    from siicl.kernel import ReadableEvent
+    from siicl.services import gfx
+
+    p = process()
+    session = services.Session(gfx.Session497(p))
+    _, msg = send(p, session, tipc(12, struct.pack("<I", 0)))
+    event = p.handles.get(msg.move_handles[0])
+    assert isinstance(event, ReadableEvent) and not event.signaled
+    send(p, session, tipc(21, struct.pack("<I", 0)))
+    assert event.signaled
+    _, msg = send(p, session, tipc(11))
+    assert struct.unpack_from("<III", p.cpu.read(p.main_thread.tls, 20), 8) == (0, 0, 63)
+
+
+def test_the_display_session_opens_the_default_display():
+    from siicl.services import gfx
+
+    p = process()
+    session = services.Session(gfx.DisplaySession(p))
+    text, _ = send(p, session, tipc(101, b"default\0" + struct.pack("<I", 1)))
+    assert text == "vi2 session command 101 (open display)('default', 1)"
+    _, msg = send(p, session, tipc(11, struct.pack("<I", 1)))
+    assert p.handles.get(msg.move_handles[0]).signaled

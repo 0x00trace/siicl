@@ -116,27 +116,52 @@ Services so far, each with the commands the sample has used:
 | `bsd:u`, `bsd:s` | Socket clients register; nothing connects |
 | `acc:u0` | One user account |
 | `ldr:ro` | Takes the process handle |
-| Graphics supervisor | Reached with ISelfController GetGraphicsSupervisor, not through `sm:`. See below. |
+| Graphics supervisor | Reached with ISelfController GetGraphicsSupervisor, not through `sm:`. Its sessions include the display library's. See below. |
 | `nvsrv` | The GPU driver service, handed out by the graphics supervisor. Nothing is implemented yet. |
 
 ### The graphics supervisor
 
-The Switch 2 SDK boots its graphics system (`nn::gs::sdk::BootGraphicsSystem`) through a graphics supervisor. The applet's ISelfController command 2000 (GetGraphicsSupervisor) hands out a session for it as a copied handle. The supervisor speaks TIPC, and its client in the SDK (`nn::gsv`) writes the messages by hand. No public documentation describes its commands. This is what siicl has learned from the client code, in the order the sample sends them:
+The Switch 2 SDK boots its graphics system (`nn::gs::sdk::BootGraphicsSystem`) through a graphics supervisor. The applet's ISelfController command 2000 (GetGraphicsSupervisor) hands out a session for it as a copied handle. The supervisor and the sessions it hands out speak TIPC, and their clients in the SDK write the messages by hand. No public documentation describes the commands, so siicl names them by number. This is what siicl has learned from the client code, in the order the sample sends the commands. "Handle" means one handle in the response, which the client reads before the result.
 
-| Command | Request | Response |
-|---|---|---|
-| 4 | The process ID, a u64 (0x8000000000000006 in the sample), zeros; a copy of the process handle | Result |
-| 11 | A copy of the process handle | Result |
-| 101 | Nothing | Result |
-| 1501, 1502 | Nothing (from `nn::gsv::shim::detail::InitializeInterModuleImageContext`) | Result |
-| 1402 | Nothing (from `nn::nvsrv::BootWithRemoteMemory`) | One handle: a session for the GPU driver service, `nvsrv`. Then the result. |
-| 201 | Nothing | Result |
-| 202 | Nothing | One handle, then the result. What the handle is for is not known yet. |
-| 204 | Two transfer memories (copied): 0x1000 bytes the game keeps read and write, and 0x2000 bytes it keeps read-only; arguments 1, 0x1FF and their two sizes | Two moved handles, which the client attaches as system events. Then the result. |
+Supervisor:
+
+| Command | Sent by | Request | Response |
+|---|---|---|---|
+| 4 | `nn::gsv::BootWithRemoteMemory` | The process ID, a u64 (0x8000000000000006 in the sample), zeros; a copy of the process handle | Result |
+| 11 | the same | A copy of the process handle | Result |
+| 101 | the same | Nothing | Result |
+| 1501, 1502 | `nn::gsv::shim::detail::InitializeInterModuleImageContext` | Nothing | Result |
+| 1402 | `nn::nvsrv::BootWithRemoteMemory` | Nothing | Handle: a session for the GPU driver service, `nvsrv` |
+| 201 | `BootGraphicsSystem` | Nothing | Result |
+| 202 | the same | Nothing | Handle: a session (see below) |
+| 204 | the same | Two transfer memories (copied): 0x1000 bytes the game keeps read and write, and 0x2000 bytes it keeps read-only; arguments 1, 0x1FF and their two sizes | Two moved handles, which the client attaches as system events |
+| 115 | `nn::gs::sdk::BootNativeMemoryManagement` | Memory block mode bits (2 in the sample) | The mode bits granted, as a u64 after the result. `CreateNativeMemory` tests bit 1. siicl grants what was asked. |
+| 1101, 1102 | `nn::gs::sdk::BootGraphicsFrameManagement` | Nothing | Result |
+| 497 | `nn::gpu::sdk::BootWithRemoteMemory` | A u64 (4 in the sample) | Handle: a session (see below) |
+| 401, 402, 301 | `BootGraphicsSystem` | Nothing | Result |
+| 305 | the same | Two u32s (0x20000 and 3 in the sample) | Handle: a session for the display library, `nn::vi2` |
+
+The session from 202: command 1 returns a u32, which must be below 0x400; command 21 sends it back, capped at 63. siicl answers 63.
+
+The session from 497:
+
+- Command 11 returns a range of bit positions, low then high. The client makes a 64-bit mask of the bits from low to high. siicl offers 0 to 63.
+- Command 12 takes an index and returns an event.
+- Command 21 takes an index. The client then waits on that index's event, so siicl signals it at once.
+- Command 22 returns a handle whose use is not known yet.
+
+The display session from 305:
+
+- Command 3 returns a u32 below 8, and command 1 a u32 below 0x400. siicl answers 1 to both.
+- Command 11 takes a u32 and returns an event, which the client polls until it is signaled. siicl hands it out already signaled.
+- Command 21 returns a result.
+- Command 101 takes a display name ("default") and a u32.
+
+After command 204, the client checks a header that the supervisor should have written at the start of the read-only transfer memory, made of 32-bit words: 1, a value, a size below 0x1000, then five offsets. Three of the offsets point into the read-only memory and two into the read-write memory. So the supervisor and the game talk through queues in that shared memory, signalled by the two events. siicl writes a header with values that pass the client's checks, but it does not serve the queues yet. Their values are guesses, and the sample has not used the queues so far. Closing the game's handles to the transfer memories does not give the pages back, because the supervisor still holds them, as on the console.
 
 `nvsrv` speaks CMIF. Its first command in the sample, 13, comes from `NvOsDrvAttach` with a 1 as its argument, which fits `nvdrv`'s command 13 on the Switch 1 (SetGraphicsFirmwareMemoryMarginEnabled).
 
-After command 204, the client expects the supervisor to have written a header at the start of the read-only transfer memory: a 32-bit 1, then a 32-bit value, a size below 0x1000, and five offsets into the two transfer memories. So the supervisor and the game talk through queues in that shared memory, signalled by the two events. siicl does not write that header yet, so the sample stops there.
+With these answers, `BootGraphicsSystem` finishes in the sample, and the game goes on to initialize input (`hid`).
 
 ### The time shared memory
 
@@ -175,6 +200,8 @@ The log has these parts, in this order:
    - time: the time limit was reached
 6. For the thread that ended the run, its registers X0 to X30, SP and PC, and a backtrace: the stop address, the link register if it points into a module, then the return addresses found by following the frame pointers (X29) up the stack. Each address the modules' dynamic symbol tables name gets the function's name (`siicl.symbols`, demangled with `c++filt` from `aarch64-linux-gnu-binutils`).
 7. Every thread with its state and where it is.
+
+   A line that repeats (the same SVC, arguments and result from the same thread) is written once, followed by a count, such as `(the line above 4 more times)`.
 8. With `--stub-unknown`, the service commands and services answered without being implemented.
 9. How many times the game called each SVC.
 

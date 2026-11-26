@@ -252,6 +252,9 @@ def _dispatch(target: Service, number: int, call: Call) -> tuple[str, int]:
         text += f" -> {result:#x}"
     if call.objects:
         text += " -> " + ", ".join(o.name for o in call.objects)
+    handles = call.copy_handles + call.move_handles
+    if handles:
+        text += f" -> handles {', '.join(f'{h:#x}' for h in handles)}"
     return text, result
 
 

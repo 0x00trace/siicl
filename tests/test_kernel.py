@@ -806,3 +806,19 @@ def test_transfer_memory_locks_its_pages_until_the_handle_is_closed(tmp_path):
     assert end.reason == "exit", end.message
     assert [p.cpu.x(n) for n in (20, 22, 23, 24, 25)] == [0, MemoryAttribute.LOCKED, 1, 0, 3]
     assert p.cpu.x(26) == svcs.INVALID_NEW_MEMORY_PERMISSION
+
+
+def test_the_log_counts_a_line_that_repeats_instead_of_writing_it_again(tmp_path):
+    p, end, log = run(
+        tmp_path,
+        """
+        mov x19, #5
+    1:  mov x0, #0
+        svc #0x0b
+        subs x19, x19, #1
+        b.ne 1b
+        svc #0x07
+        """,
+    )
+    lines = [ln for ln in log.splitlines() if "SleepThread" in ln or "more times" in ln]
+    assert len(lines) == 2 and lines[1].endswith("(the line above 4 more times)")

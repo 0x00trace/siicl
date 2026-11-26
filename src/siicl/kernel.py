@@ -180,6 +180,7 @@ class TransferMemory:
 
     def __init__(self, address: int, size: int, perm: int) -> None:
         self.address, self.size, self.perm = address, size, perm
+        self.kept = False  # a service holds it, so closing the game's handle does not give the pages back
 
 
 class HandleTable:
@@ -246,6 +247,8 @@ class Process:
         self.svc_counts: Counter[str] = Counter()
         self._next_core = 0
         self._symbols = None
+        self._last_trace: tuple[int, str] | None = None
+        self._repeats = 0
         self.user_exception_context = 0
         stack_size = npdm.main_thread_stack_size if npdm else DEFAULT_STACK_SIZE
         stack = self.space.map_free(
@@ -398,13 +401,33 @@ class Process:
         return self.ticks / TICK_HZ
 
     def trace(self, thread: Thread, text: str) -> None:
-        if self.log:
-            print(f"{self.seconds:11.6f} t{thread.number:<2} {text}", file=self.log)
+        """Log a line. A run of the same line from the same thread is written once, then counted."""
+        if not self.log:
+            return
+        key = (thread.number, text)
+        if key == self._last_trace:
+            self._repeats += 1
+            return
+        self._flush_repeats()
+        self._last_trace = key
+        print(f"{self.seconds:11.6f} t{thread.number:<2} {text}", file=self.log)
+
+    def _flush_repeats(self) -> None:
+        if self._repeats and self.log:
+            number, _ = self._last_trace
+            print(f"{self.seconds:11.6f} t{number:<2} (the line above {self._repeats:,} more times)", file=self.log)
+        self._repeats = 0
 
     def run(self, log: TextIO | None = None, *, max_seconds: float = 60.0) -> End:
+        self.log = log
+        try:
+            return self._run(max_seconds)
+        finally:
+            self._flush_repeats()
+
+    def _run(self, max_seconds: float) -> End:
         from siicl import svcs  # here, because siicl.svcs imports this module
 
-        self.log = log
         max_ticks = int(max_seconds * TICK_HZ)
         while True:
             if self.ticks >= max_ticks:

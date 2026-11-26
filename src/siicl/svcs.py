@@ -477,7 +477,7 @@ def close_handle(p: Process, t: Thread) -> str:
         p.handles.close(handle)
     except KeyError:
         return f"(handle={handle:#x})" + _result(p, INVALID_HANDLE)
-    if isinstance(obj, TransferMemory):  # the lent pages come back
+    if isinstance(obj, TransferMemory) and not obj.kept:  # the lent pages come back
         p.space.update(obj.address, obj.size, perm=RW, attribute=0)
     return f"(handle={handle:#x})" + _result(p, OK)
 
