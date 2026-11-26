@@ -13,6 +13,14 @@ SIICL is a research project toward a Switch 2 compatibility layer for Linux, to 
 
 Reports go to `~/.cache/siicl/<title id>/` as `report.md` and `report.json`.
 
+- `siicl vzip` reads the VZIP archive that holds a game's data (the romfs of a NUP container):
+  - `stats`: a summary and a count of file types
+  - `list`: the index entries, with their asset paths when known
+  - `paths`: recovers asset paths for index names and writes them to `~/.cache/siicl/<title id>/vzip-paths.tsv`
+  - `extract`: writes chosen entries (by name, path or file type) to a folder outside the repository
+  - `verify`: decompresses every entry and checks its CRC-32
+  - `grep`: lists entries whose data contains a byte pattern
+
 ## Requirements
 
 - Arch Linux packages: `python` (3.14), `uv`, `lz4`, `aarch64-linux-gnu-binutils`
@@ -24,6 +32,9 @@ Reports go to `~/.cache/siicl/<title id>/` as `report.md` and `report.json`.
 uv run siicl info  ~/Games/game_dumps/switch_2/game.nup
 uv run siicl scan  ~/Games/game_dumps/switch_2/game.nup
 uv run siicl scan  ~/Games/game_dumps/switch_2/game.nup --module main --jobs 8
+uv run siicl vzip stats  ~/Games/game_dumps/switch_2/game.nup
+uv run siicl vzip paths  ~/Games/game_dumps/switch_2/game.nup
+uv run siicl vzip extract ~/Games/game_dumps/switch_2/game.nup --out ~/siicl-out --path data/dir/file.png.import
 ```
 
 ## No game content in this repository
@@ -37,3 +48,4 @@ git config core.hooksPath .githooks
 ## Formats
 
 - [docs/nup-format.md](docs/nup-format.md): the NUP container, as worked out from a sample
+- [docs/vzip-format.md](docs/vzip-format.md): the VZIP archive in a NUP container's romfs

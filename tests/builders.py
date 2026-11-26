@@ -9,10 +9,11 @@ import hashlib
 import shutil
 import struct
 import subprocess
+import zlib
 from compression import zstd
 from pathlib import Path
 
-from siicl import lz4
+from siicl import lz4, vzip
 
 AS = shutil.which("aarch64-linux-gnu-as")
 OBJCOPY = shutil.which("aarch64-linux-gnu-objcopy")
@@ -193,3 +194,78 @@ def build_npdm(
     meta.extend(b"\0" * (acid_off - len(meta)))
     meta.extend(acid)
     return bytes(meta)
+
+
+def build_vzip(files, *, aliases=None, keys=None, zip64_offsets=False) -> bytes:
+    """files: list of (name, data, compress). aliases: {alias name: name of the file it shares data with}."""
+    aliases = aliases or {}
+    keys = keys or {}
+    names = [n for n, _, _ in files] + list(aliases)
+    strtab = bytearray()
+    name_off = {}
+    for n in names:
+        name_off[n] = len(strtab)
+        strtab += n.encode() + b"\0"
+    index_size = vzip.HEADER_SIZE + vzip.RECORD_SIZE * len(names) + len(strtab)
+    pos = (index_size + 15) & ~15
+
+    body = bytearray()
+    placed = {}  # name -> (data offset, stored, size, comp, crc, header offset)
+    for name, data, compress in files:
+        payload = b"".join(struct.pack("<I", len(blk)) + blk for blk in lz4.compress_linked(data)) if compress else data
+        lho = pos + len(body)
+        nb = name.encode()
+        k = 2
+        while (lho + 30 + len(nb) + 20 + 4 + k) % 16:
+            k += 1
+        extra = struct.pack("<HHQQ", 1, 16, len(data), len(payload)) + struct.pack("<HHH", 0xA11E, k, 16) + bytes(k - 2)
+        body += struct.pack("<IHHHHHIIIHH", 0x04034B50, 45, 8, 0, 0, 0, 0, 0xFFFFFFFF, 0xFFFFFFFF, len(nb), len(extra))
+        body += nb + extra
+        data_off = pos + len(body)
+        crc = zlib.crc32(data)
+        body += payload
+        body += struct.pack("<IIQQ", 0x08074B50, crc, len(payload), len(data))
+        placed[name] = (data_off, len(payload), len(data), 1 if compress else 0, crc, lho)
+
+    cd = bytearray()
+    for name, _, _ in files:
+        data_off, stored, size, comp, crc, lho = placed[name]
+        nb = name.encode()
+        z64 = struct.pack("<QQ", size, stored) + (struct.pack("<Q", lho) if zip64_offsets else b"")
+        extra = struct.pack("<HH", 1, len(z64)) + z64 + struct.pack("<HHH", 0xA11E, 2, 16)
+        field = 0xFFFFFFFF if zip64_offsets else lho
+        cd += struct.pack(
+            "<IHHHHHHIIIHHHHHII",
+            0x02014B50,
+            0x0A2D,
+            45,
+            8,
+            0,
+            0,
+            0,
+            crc,
+            0xFFFFFFFF,
+            0xFFFFFFFF,
+            len(nb),
+            len(extra),
+            0,
+            0,
+            0,
+            0,
+            field,
+        )
+        cd += nb + extra
+    cd_off = pos + len(body)
+    z64_off = cd_off + len(cd)
+    tail = struct.pack("<IQHHIIQQQQ", 0x06064B50, 44, 0x0A2D, 45, 0, 0, len(files), len(files), len(cd), cd_off)
+    tail += struct.pack("<IIQI", 0x07064B50, 0, z64_off, 1)
+    tail += struct.pack("<IHHHHIIH", 0x06054B50, 0, 0, 0xFFFF, 0xFFFF, len(cd), 0xFFFFFFFF, 0)
+
+    records = []
+    for n in names:
+        data_off, stored, size, comp, _, _ = placed[aliases.get(n, n)]
+        key = keys.get(n, vzip.key_for_name(n))
+        records.append((key, struct.pack("<IIQQQII", name_off[n], 0x65FFFFFF, data_off, stored, size, comp, key)))
+    records.sort(key=lambda kv: kv[0])
+    index = struct.pack("<4sII", b"VZIP", len(names), len(strtab)) + b"".join(r for _, r in records) + strtab
+    return index + bytes(pos - len(index)) + bytes(body) + bytes(cd) + tail

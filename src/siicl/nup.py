@@ -244,6 +244,11 @@ class NupReader:
             raise NupError(f"{entry.path} does not match its SHA-256 hash")
         return data
 
+    def peek(self, entry: NupFile, n: int) -> bytes:
+        """Return the first `n` stored bytes of an entry, without decompressing or checking it."""
+        self._f.seek(entry.offset)
+        return self._f.read(min(n, entry.stored_size))
+
     def metadata(self) -> list[MetadataRecord]:
         if not self.info.metadata_size:
             return []

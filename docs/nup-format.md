@@ -101,4 +101,4 @@ Kinds seen: 1 (a copy of the NPDM), 3 (a JPEG image, probably the icon), 5 and 8
 ## Contents of the sample
 
 - The data is decrypted. The executables are standard `NSO0` files and the process descriptor is a standard `META` NPDM, so Switch 1 tools for those formats apply.
-- The romfs holds one large file stored without compression, which starts with the magic `VZIP` and ends with a ZIP64 end-of-central-directory record.
+- The romfs holds one large file stored without compression: a VZIP archive, described in [vzip-format.md](vzip-format.md).

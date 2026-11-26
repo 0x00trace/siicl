@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from siicl import a64scan, npdm, nso, nup, paths
+from siicl import a64scan, npdm, nso, nup, paths, vzip
 from siicl.report import ModuleScan, Report, to_dict, to_markdown
 
 EXEFS_MODULES = (
@@ -107,6 +107,161 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _gib(n: int) -> str:
+    return f"{n / (1 << 30):.2f} GiB"
+
+
+def cmd_vzip_list(args: argparse.Namespace) -> int:
+    with vzip.VzipReader.open(args.file) as r:
+        entries = r.entries
+        if args.sort == "size":
+            entries = sorted(entries, key=lambda e: -e.size)
+        elif args.sort == "offset":
+            entries = sorted(entries, key=lambda e: (e.offset, e.index))
+        known = _read_paths(Path(args.paths)) if args.paths else {}
+        if args.limit:
+            entries = entries[: args.limit]
+        print(f"{'Name':<17} {'Key':<8} {'Offset':>14} {'Stored':>14} {'Size':>14} Comp  {'Type':<16} Path")
+        for e in entries:
+            kind = vzip.file_type(r.head(e, 64))
+            comp = vzip.COMPRESSION_NAMES.get(e.compression, str(e.compression))
+            print(
+                f"{e.name:<17} {e.key:08x} {e.offset:>#14x} {e.stored_size:>14,} {e.size:>14,} {comp:<5} "
+                f"{kind:<16} {known.get(e.name, '')}"
+            )
+    return 0
+
+
+def _read_paths(path: Path) -> dict[str, str]:
+    out = {}
+    for line in path.read_text().splitlines()[1:]:
+        name, _, p = line.partition("\t")
+        out[name] = p
+    return out
+
+
+def _default_out(source: str, leaf: str) -> Path:
+    """~/.cache/siicl/<title id or file stem>/<leaf>."""
+    label = Path(source).stem
+    with open(source, "rb") as f:
+        is_nup = f.read(3) == nup.MAGIC
+    if is_nup:
+        with nup.NupReader(source) as r:
+            label = f"{r.info.title_id:016X}"
+    return paths.cache_dir() / label / leaf
+
+
+def cmd_vzip_paths(args: argparse.Namespace) -> int:
+    out = paths.ensure_outside_repo(Path(args.out) if args.out else _default_out(args.file, "vzip-paths.tsv"))
+    with vzip.VzipReader.open(args.file) as r:
+        found = vzip.recover_paths(r)
+        total = len(r.entries)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w") as f:
+        f.write("name\tpath\n")
+        for name, p in sorted(found.items(), key=lambda kv: kv[1]):
+            f.write(f"{name}\t{p}\n")
+    print(f"Found paths for {len(found):,} of {total:,} names; wrote {out}")
+    return 0
+
+
+def cmd_vzip_stats(args: argparse.Namespace) -> int:
+    with vzip.VzipReader.open(args.file) as r:
+        unique = r.unique_data()
+        zips = r.zip_entries
+        keys = [e.key for e in r.entries]
+        print(
+            f"Index records:          {len(r.entries):,} (keys sorted: {'yes' if r.keys_sorted else 'no'}, "
+            f"{len(keys) - len(set(keys)):,} duplicate keys)"
+        )
+        print(f"Stored copies of data:  {len(unique):,} ({len(r.entries) - len(unique):,} names are aliases)")
+        print(
+            f"ZIP central directory:  {len(zips):,} entries; {sum(1 for n in zips if n not in r.by_name):,} "
+            "not in the index"
+        )
+        print(f"Compressed (LZ4):       {sum(1 for e in unique if e.compression == 1):,} of {len(unique):,}")
+        print(
+            f"Size:                   {_gib(sum(e.size for e in unique))} "
+            f"({_gib(sum(e.stored_size for e in unique))} stored)"
+        )
+        print(f"Index flags field:      {', '.join(f'{v:#x}' for v in sorted({e.flags for e in r.entries}))}")
+        fnv = sum(1 for e in r.entries if vzip.key_for_name(e.name) == e.key)
+        print(f"Keys = FNV-1a 32 of name: {fnv:,} of {len(r.entries):,}")
+        types: dict[str, list[int]] = {}
+        for e in unique:
+            t = types.setdefault(vzip.file_type(r.head(e, 64)), [0, 0])
+            t[0] += 1
+            t[1] += e.size
+        print(f"\nFile types (by first bytes; {len(types):,} distinct):")
+        print(f"  {'Type':<16} {'Files':>8} {'Size':>12}")
+        for name, (count, size) in sorted(types.items(), key=lambda kv: -kv[1][1])[: args.top]:
+            print(f"  {name:<16} {count:>8,} {_gib(size):>12}")
+    return 0
+
+
+def cmd_vzip_extract(args: argparse.Namespace) -> int:
+    if not (args.name or args.path or args.type or args.all):
+        print("siicl: choose entries with --name, --path, --type or --all", file=sys.stderr)
+        return 2
+    out = paths.ensure_outside_repo(Path(args.out))
+    with vzip.VzipReader.open(args.file) as r:
+        if args.all:
+            chosen = r.unique_data()
+        else:
+            chosen = [r.find(n) for n in args.name or []] + [r.find_path(p) for p in args.path or []]
+            if args.type:
+                wanted = set(args.type)
+                chosen += [e for e in r.unique_data() if vzip.file_type(r.head(e, 64)) in wanted]
+        chosen = list({e.index: e for e in chosen}.values())
+        print(f"Extracting {len(chosen):,} files, {_gib(sum(e.size for e in chosen))}, to {out}", file=sys.stderr)
+        out.mkdir(parents=True, exist_ok=True)
+        with open(out / "index.tsv", "w") as listing:
+            listing.write("file\tname\tkey\tsize\ttype\taliases\n")
+            for e in chosen:
+                data = r.read(e, max_size=1 << 62)
+                fname = vzip.output_name(e)
+                (out / fname).write_bytes(data)
+                aliases = ",".join(a.name for a in r.aliases(e) if a.index != e.index)
+                listing.write(f"{fname}\t{e.name}\t{e.key:08x}\t{e.size}\t{vzip.file_type(data[:64])}\t{aliases}\n")
+    print(f"Wrote {out / 'index.tsv'}", file=sys.stderr)
+    return 0
+
+
+def _run_pass(args: argparse.Namespace, pattern: bytes | None) -> vzip.PassResult:
+    t0 = time.monotonic()
+    last = [0.0]
+
+    def progress(res: vzip.PassResult, total: int) -> None:
+        now = time.monotonic()
+        if now - last[0] >= 2 or res.checked + len(res.failures) == total:
+            last[0] = now
+            print(
+                f"  {res.checked + len(res.failures):,} of {total:,} files, {_gib(res.bytes)}, {now - t0:.0f} s",
+                file=sys.stderr,
+            )
+
+    return vzip.check_archive(args.file, jobs=args.jobs, pattern=pattern, progress=progress)
+
+
+def cmd_vzip_verify(args: argparse.Namespace) -> int:
+    res = _run_pass(args, None)
+    print(f"Checked {res.checked:,} files ({_gib(res.bytes)}): {len(res.failures):,} failed")
+    for name, err in res.failures[:20]:
+        print(f"  {name}: {err}")
+    return 1 if res.failures else 0
+
+
+def cmd_vzip_grep(args: argparse.Namespace) -> int:
+    pattern = bytes.fromhex(args.pattern) if args.hex else args.pattern.encode()
+    res = _run_pass(args, pattern)
+    with vzip.VzipReader.open(args.file) as r:
+        for name, pos in sorted(res.matches):
+            e = r.find(name)
+            print(f"{name:<17} at {pos:#x} of {e.size:,} bytes, type {vzip.file_type(r.head(e, 64))}")
+    print(f"{len(res.matches):,} of {res.checked:,} files contain the pattern", file=sys.stderr)
+    return 1 if res.failures else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="siicl", description="Research tools toward a Switch 2 compatibility layer.")
     sub = p.add_subparsers(dest="command", required=True)
@@ -128,6 +283,41 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--jobs", type=int, help="parallel objdump processes (default: CPU count, at most 16)")
     scan.add_argument("--module", action="append", help="scan only this module; repeat for more")
     scan.set_defaults(func=cmd_scan)
+
+    vz = sub.add_parser("vzip", help="read the VZIP archive in a NUP container's romfs (or a VZIP file)")
+    vsub = vz.add_subparsers(dest="vzip_command", required=True)
+    v_list = vsub.add_parser("list", help="list the index entries")
+    v_list.add_argument("file")
+    v_list.add_argument("--sort", choices=["key", "size", "offset"], default="key")
+    v_list.add_argument("--limit", type=int, default=0, help="show at most this many entries")
+    v_list.add_argument("--paths", help="a TSV from 'siicl vzip paths' to show known paths")
+    v_list.set_defaults(func=cmd_vzip_list)
+    v_stats = vsub.add_parser("stats", help="summarise the archive and count file types")
+    v_stats.add_argument("file")
+    v_stats.add_argument("--top", type=int, default=40, help="file types to show (default 40)")
+    v_stats.set_defaults(func=cmd_vzip_stats)
+    v_ext = vsub.add_parser("extract", help="write entries to a folder outside the repository")
+    v_ext.add_argument("file")
+    v_ext.add_argument("--out", required=True)
+    v_ext.add_argument("--name", action="append", help="an entry name; repeat for more")
+    v_ext.add_argument("--path", action="append", help="an asset path, such as data/x.png.import; repeat for more")
+    v_ext.add_argument("--type", action="append", help="a file type as 'vzip stats' shows it; repeat for more")
+    v_ext.add_argument("--all", action="store_true", help="every stored copy of data (aliases go in index.tsv)")
+    v_ext.set_defaults(func=cmd_vzip_extract)
+    v_paths = vsub.add_parser("paths", help="recover asset paths for index names and write them as TSV")
+    v_paths.add_argument("file")
+    v_paths.add_argument("--out", help="output file (default ~/.cache/siicl/<title id>/vzip-paths.tsv)")
+    v_paths.set_defaults(func=cmd_vzip_paths)
+    v_ver = vsub.add_parser("verify", help="decompress every entry and check its CRC-32")
+    v_ver.add_argument("file")
+    v_ver.add_argument("--jobs", type=int, default=8, help="worker processes (default 8)")
+    v_ver.set_defaults(func=cmd_vzip_verify)
+    v_grep = vsub.add_parser("grep", help="list entries whose data contains a byte pattern")
+    v_grep.add_argument("file")
+    v_grep.add_argument("pattern")
+    v_grep.add_argument("--hex", action="store_true", help="the pattern is hex, such as 424e5348")
+    v_grep.add_argument("--jobs", type=int, default=8, help="worker processes (default 8)")
+    v_grep.set_defaults(func=cmd_vzip_grep)
     return p
 
 
@@ -135,6 +325,14 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (nup.NupError, nso.NsoError, npdm.NpdmError, a64scan.ScanError, paths.OutputPathError) as e:
+    except (
+        nup.NupError,
+        nso.NsoError,
+        npdm.NpdmError,
+        vzip.VzipError,
+        a64scan.ScanError,
+        paths.OutputPathError,
+        KeyError,
+    ) as e:
         print(f"siicl: {e}", file=sys.stderr)
         return 1
