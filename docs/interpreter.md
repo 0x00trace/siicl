@@ -31,6 +31,7 @@ Each thread has its own program counter. A warp repeatedly picks the lowest prog
 - Warps run one after another until each is waiting or finished, and workgroups run one after another.
 - A run stops with `ExecutionError` after a step limit (50 million thread-instructions by default), so a program that loops on its inputs can't run forever.
 - `run(..., reverse=True)` runs workgroups, warps and the threads of each instruction in the opposite order. A result that differs between the two orders depends on the order in which threads run, for example when two threads store different values to the same texel.
+- `Surface.track_writes()` records the last thread that wrote each word, and in `Surface.conflicts` the words that two threads wrote with different values. Their final value depends on the order of the two stores, which the GPU programming model leaves open.
 - `Launch.mufu_results` can give `MUFU` results by instruction address and input. A check against a GPU fills it with the GPU's own results, which are approximations.
 
 ## Rules

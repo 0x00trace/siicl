@@ -283,6 +283,10 @@ class Surface:
     depth: int = 1
     channels: int = 4
     data: list[int] = field(default_factory=list)
+    # With track_writes(): the last writer of each word, and the words that two threads wrote with
+    # different values. Their final value depends on the order in which threads run.
+    writers: dict[int, tuple[object, int]] | None = None
+    conflicts: set[int] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         n = self.width * self.height * self.depth * self.channels
@@ -290,6 +294,18 @@ class Surface:
             self.data = [0] * n
         elif len(self.data) != n:
             raise ValueError(f"surface data has {len(self.data)} words, expected {n}")
+
+    def track_writes(self) -> None:
+        self.writers = {}
+        self.conflicts = set()
+
+    def write(self, i: int, value: int, writer: object) -> None:
+        self.data[i] = value
+        if self.writers is not None:
+            prev = self.writers.get(i)
+            if prev is not None and prev[0] != writer and prev[1] != value:
+                self.conflicts.add(i)
+            self.writers[i] = (writer, value)
 
     def index(self, x: int, y: int, z: int) -> int | None:
         if 0 <= x < self.width and 0 <= y < self.height and 0 <= z < self.depth:
@@ -444,8 +460,9 @@ class Program:
 def run(program: Program, launch: Launch, *, step_limit: int = DEFAULT_STEP_LIMIT, reverse: bool = False) -> Result:
     """Run every workgroup of the grid. Changes the launch's surfaces and memory in place.
 
-    reverse runs workgroups, warps and the threads of each instruction in the opposite order. Results
-    that differ between the two orders depend on the order in which threads run.
+    reverse runs workgroups, warps and the threads of each instruction in the opposite order, and
+    within a warp runs the highest program counter first instead of the lowest. Results that differ
+    between the two orders depend on the order in which threads run.
     """
     ctx = _Context(launch, program.info)
     code: list[Step] = []
@@ -464,7 +481,7 @@ def run(program: Program, launch: Launch, *, step_limit: int = DEFAULT_STEP_LIMI
             cta.warps.reverse()
             for w in cta.warps:
                 w.threads.reverse()
-        steps = _run_cta(cta, code, program.instructions, steps, step_limit)
+        steps = _run_cta(cta, code, program.instructions, steps, step_limit, max if reverse else min)
     return Result(steps, len(ctas))
 
 
@@ -475,7 +492,7 @@ def _raiser(err: Exception) -> Step:
     return step
 
 
-def _run_cta(cta: Cta, code: list[Step], ins: list[sass.Instruction], steps: int, limit: int) -> int:
+def _run_cta(cta: Cta, code: list[Step], ins: list[sass.Instruction], steps: int, limit: int, pick=min) -> int:
     n = len(code)
     while True:
         for warp in cta.warps:
@@ -485,7 +502,7 @@ def _run_cta(cta: Cta, code: list[Step], ins: list[sass.Instruction], steps: int
                     if warp.release():
                         continue
                     break
-                pc = min(t.pc for t in runnable)
+                pc = pick(t.pc for t in runnable)
                 if pc >= n:
                     raise ExecutionError(f"a thread ran past the end of the program at {pc * INSTRUCTION_SIZE:#x}")
                 group = [t for t in runnable if t.pc == pc]
@@ -1550,7 +1567,7 @@ def _sust(ins: sass.Instruction, ctx: _Context) -> ThreadFn:
         if i is None:
             return
         for k in range(surf.channels):
-            surf.data[i + k] = t.r[n + k] if k < count and n + k < 255 else 0
+            surf.write(i + k, t.r[n + k] if k < count and n + k < 255 else 0, (t.warp.cta.ctaid, t.tid))
 
     return fn
 

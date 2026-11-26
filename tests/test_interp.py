@@ -251,6 +251,25 @@ def test_reverse_order_changes_only_order_dependent_results():
     assert counts[:4] == [8] * 4 and bits[:4] == [c | 0x1C for c in range(4)]
 
 
+def test_conflicting_stores_are_recorded():
+    lines = [
+        s2r(0, "SR_TID.X"),
+        ("LOP3.LUT R1, R0, 0x1, RZ, 0xc0, !PT", 0x812, {16: 1, 24: 0, 32: 1, 64: 255, 72: 0xC0, 81: 7, **PT_NOT}),
+        ("SHF.R.U32.HI R2, RZ, 0x1, R0", 0x819, {16: 2, 24: 255, 32: 1, 64: 0, 73: 3, 76: 1, 80: 1}),
+        store(1, 2),  # threads 0, 2, 4, ... all store to word 0, threads 1, 3, 5, ... to word 1
+        store(1, 1, 2),  # each thread stores its own parity: the same value for every writer
+        exit_(),
+        bra_self(6),
+    ]
+    surf, same = interp.Surface(2, channels=1), interp.Surface(2, channels=1)
+    surf.track_writes()
+    same.track_writes()
+    launch = interp.Launch((1, 1, 1), {}, {(0, 1): surf, (0, 2): same})
+    interp.run(interp.Program(program(*lines), ComputeInfo((32, 1, 1), 0, 32, b"")), launch)
+    assert surf.conflicts == {0, 1}
+    assert same.conflicts == set()
+
+
 def test_recorded_mufu_results_replace_computed_ones():
     lines = [
         s2r(0, "SR_TID.X"),
