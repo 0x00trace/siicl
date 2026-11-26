@@ -692,6 +692,12 @@ def _guard(ins: sass.Instruction) -> PredReader | None:
     return None if ins.guard is None else _psrc(ins.guard)
 
 
+# Instructions of the uniform datapath. Their registers belong to the warp, so they run once for
+# the threads that execute them together, not once per thread.
+_UNIFORM = {"UIADD3", "UIMAD", "ULEA", "ULOP3", "USHF", "UISETP", "UMOV", "UFLO", "UPOPC", "UBREV", "USEL"}
+_UNIFORM |= {"UPRMT", "ULDC"}
+
+
 def _compile(ins: sass.Instruction, ctx: _Context) -> Step:
     if ins.name in _GROUP:
         return _GROUP[ins.name](ins, ctx)
@@ -699,6 +705,15 @@ def _compile(ins: sass.Instruction, ctx: _Context) -> Step:
         raise Unsupported(f"no rule for {ins.name}")
     fn = _THREAD[ins.name](ins, ctx)
     guard = _guard(ins)
+    if ins.name in _UNIFORM:
+
+        def step_uniform(group: list[Thread], warp: Warp) -> None:
+            if guard is None or guard(group[0]):
+                fn(group[0])
+            for t in group:
+                t.pc += 1
+
+        return step_uniform
     if guard is None:
 
         def step(group: list[Thread], warp: Warp) -> None:

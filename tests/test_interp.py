@@ -276,6 +276,23 @@ def test_float_instructions_and_constant_buffers():
         assert r5[tid] == (0x7F800000 if tid == 0 else fbits(1 / tid))
 
 
+def test_uniform_instructions_run_once_per_warp():
+    # Every thread of the warp reaches the UIADD3, but uniform registers belong to the warp,
+    # so the add happens once: 3 + 1, not 3 + 32 * 1.
+    lines = [
+        s2r(0, "SR_TID.X"),
+        ("UMOV UR4, 0x3", 0x882, {16: 4, 32: 3}),
+        ("UMOV UR5, 0x1", 0x882, {16: 5, 32: 1}),
+        ("UIADD3 UR4, UR4, UR5, URZ", 0x290, {16: 4, 24: 4, 32: 5, 64: 63, 81: 7, 84: 7}),
+        ("MOV R1, UR4", 0xC02, {16: 1, 32: 4}),
+        store(0, 1),
+        exit_(),
+        bra_self(7),
+    ]
+    (out,) = run(lines)
+    assert out == [4] * 32
+
+
 def test_instruction_without_a_rule():
     lines = [("HADD2 R1, R2, R3", 0x230, {16: 1, 24: 2, 32: 3}), exit_(), bra_self(2)]
     prog = interp.Program(program(*lines), ComputeInfo((32, 1, 1), 0, 32, b""))

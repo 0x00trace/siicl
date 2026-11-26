@@ -27,6 +27,7 @@ Each thread has its own program counter. A warp repeatedly picks the lowest prog
 
 - `BSSY Bn` records the active threads in barrier register Bn. `BSYNC Bn` makes a thread wait until every thread recorded in Bn has arrived at a `BSYNC Bn` or exited. `BREAK Bn` removes a thread from Bn.
 - `BAR.SYNC` makes a thread wait until every thread of the workgroup that hasn't exited waits at a barrier. Threads waiting for each other in other ways end the run with a deadlock error.
+- Instructions of the uniform datapath (`UIADD3`, `ULDC`, `UMOV` and the others that write uniform registers) run once for the threads executing them together, because their registers belong to the warp.
 - Warps run one after another until each is waiting or finished, and workgroups run one after another.
 - A run stops with `ExecutionError` after a step limit (50 million thread-instructions by default), so a program that loops on its inputs can't run forever.
 
