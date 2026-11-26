@@ -78,4 +78,4 @@ Two-source operations use B or C depending on the operation: FMUL takes its seco
 
 - The layouts come from the sample's instructions and the synthetic tests. Fields that neither varies may decode wrongly for other values.
 - A few rules rest on very few instructions: the `.H0_NH1` half selector of HFMA2, the `.H1` source of MUFU.F16, and the surface instructions (SUST, SULD, SURED, SUATOM).
-- The decoder describes instructions; it doesn't model what they compute.
+- The decoder describes instructions; [siicl.interp](interpreter.md) models what they compute.

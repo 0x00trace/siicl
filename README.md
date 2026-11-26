@@ -56,3 +56,4 @@ git config core.hooksPath .githooks
 - [docs/vzip-format.md](docs/vzip-format.md): the VZIP archive in a NUP container's romfs
 - [docs/shader-format.md](docs/shader-format.md): the compiled GPU shader binaries in a VZIP archive
 - [docs/sass-decoder.md](docs/sass-decoder.md): the GPU instruction decoder and the encoding it reads
+- [docs/interpreter.md](docs/interpreter.md): the reference interpreter that runs compute programs on the CPU
