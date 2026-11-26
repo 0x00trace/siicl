@@ -1,6 +1,11 @@
 # Booting a game
 
-`siicl boot <file.nup>` loads a game's executables, starts its main thread and runs the game's threads until the game needs something siicl does not implement yet. It writes what happened to `boot.log` in `~/.cache/siicl/<title id>/`. `--seconds` sets how much guest time the run may use (60 seconds by default).
+`siicl boot <file.nup>` loads a game's executables, starts its main thread and runs the game's threads until the game needs something siicl does not implement yet. It writes what happened to `boot.log` in `~/.cache/siicl/<title id>/`.
+
+Options:
+
+- `--seconds`: how much guest time the run may use (60 seconds by default)
+- `--stub-unknown`: answer each service command siicl does not implement with success and no data, and hand out an empty service for each service it does not know, instead of ending the run. The log lists every command answered this way. This shows how far a game gets and what it asks for next, but the game may then fail in other ways, so use it to explore, not as a result.
 
 ## The CPU
 
@@ -81,9 +86,54 @@ A thread that is switched out between an exclusive load and its exclusive store 
 - Memory: SetHeapSize, SetMemoryPermission, SetMemoryAttribute, MapMemory, UnmapMemory, QueryMemory, MapPhysicalMemory, UnmapPhysicalMemory
 - Threads: CreateThread, StartThread, ExitThread, SleepThread, GetThreadPriority, SetThreadPriority, GetThreadCoreMask, SetThreadCoreMask, GetCurrentProcessorNumber, GetThreadId, GetProcessId, CloseHandle
 - Synchronization: WaitSynchronization (on threads so far), CancelSynchronization, ArbitrateLock, ArbitrateUnlock, WaitProcessWideKeyAtomic, SignalProcessWideKey, WaitForAddress, SignalToAddress, SynchronizePreemptionState
+- IPC: ConnectToNamedPort (for "sm:"), SendSyncRequest, SendSyncRequestWithUserBuffer
+- Events and shared memory: SignalEvent, ClearEvent, ResetSignal, MapSharedMemory, UnmapSharedMemory
 - Other: GetSystemTick, GetInfo (including the Switch 2's remote region and page size types), Break, OutputDebugString, ExitProcess
 
+MapMemory and SetMemoryPermission accept heap memory and the modules' .data and .bss. The SDK maps thread stacks from its .bss with MapMemory, and makes part of each module's .data read-only after relocating it.
+
 GetInfo reports 9 GiB as the process's total memory. siicl chose this value. An SVC the NPDM does not allow ends the run as a crash, as on the console. Any other SVC, and any GetInfo type siicl does not know, ends the run as unimplemented.
+
+## IPC and services
+
+siicl answers the game's service requests itself, in Python (`siicl.services`). `siicl.ipc` reads and writes the messages: the HIPC layout, with CMIF inside for most services and TIPC for the service manager. The game connects to the "sm:" port, asks the service manager for services by name, and sends requests on the sessions it gets back. A session can become a domain, which holds several objects by ID. The control commands (converting to a domain, cloning a session, the pointer buffer size) are handled too.
+
+The service manager does not check the NPDM's list of services. The sample uses services the list does not name, such as "bsd:s", and stops if the service manager refuses them. The list also does not name the graphics services the SDK uses.
+
+Services so far, each with the commands the sample has used:
+
+| Service | What siicl does |
+|---|---|
+| `sm:` | Hands out sessions for the services below |
+| `lm` | Decodes the game's log packets into log lines, so the game's own messages appear in the boot log |
+| `appletOE` | The application proxy and its interfaces: state, self, window, audio, display, library applets and application functions, plus the Switch 2 interfaces. The message queue starts with a focus-change message. The launch parameter for the preselected user gives siicl's one user account. |
+| `pctl` and its variants | Parental controls: no restrictions |
+| `aoc:u` | Add-on content: none |
+| `ectx:aw` | Error contexts: accepted and dropped |
+| `time:u`, `time:a`, `time:s` | Clocks that start at 2026-01-01 00:00:00 UTC, a UTC time zone, and the time shared memory |
+| `fsp-srv` | The game's romfs, as a RomFS image built from the NUP container |
+| `nifm:u` | Network requests, which fail: siicl has no network |
+| `bsd:u`, `bsd:s` | Socket clients register; nothing connects |
+| `acc:u0` | One user account |
+| `ldr:ro` | Takes the process handle |
+
+### The time shared memory
+
+The Switch 2 SDK reads the clocks from a 0x1000-byte shared memory. Each value has a 32-bit counter and two copies, and the low bit of the counter says which copy is current:
+
+| Offset | Value |
+|---|---|
+| 0x00 | The steady clock's base time and source ID, as on the Switch 1 (copies at 0x08 and 0x20) |
+| 0x38 | The user system clock's context: offset in seconds, steady time point, source ID (copies of 0x20 bytes at 0x40 and 0x60) |
+| 0x80 | The network system clock's context (copies at 0x88 and 0xA8) |
+| 0xC8 | Whether the user clock corrects itself automatically (bytes at 0xCC and 0xCD) |
+| 0xD0 | The steady clock's adjustment, new on the Switch 2 (copies of 0x38 bytes at 0xD8 and 0x110): base (ns), multiplier, shift, offset (ns), bound, source ID |
+
+The SDK computes the steady clock as the time since boot plus ((time since boot − base) × multiplier >> shift) + offset. The adjustment is capped at the bound when the multiplier is not negative, and kept at least the bound when it is negative. The SDK rejects a source ID of zero. A system clock's time is its offset plus the steady clock's time, and its source ID must match the steady clock's. This layout was read from the SDK's time library in the sample.
+
+### The romfs
+
+A NUP container stores the romfs as separate files, but a game reads its romfs as one RomFS image. `siicl.romfs` builds the image's header and tables in memory, in the standard layout (see switchbrew's RomFS page), and reads file data from the container only when the game asks for it.
 
 ## The boot log
 
@@ -102,8 +152,11 @@ The log has these parts, in this order:
    - exit: the game called ExitProcess
    - deadlock: every thread waits, and none has a timeout
    - time: the time limit was reached
-6. For the thread that ended the run, its registers X0 to X30, SP and PC, and a backtrace: the stop address, the link register if it points into a module, then the return addresses found by following the frame pointers (X29) up the stack.
+6. For the thread that ended the run, its registers X0 to X30, SP and PC, and a backtrace: the stop address, the link register if it points into a module, then the return addresses found by following the frame pointers (X29) up the stack. Each address the modules' dynamic symbol tables name gets the function's name (`siicl.symbols`, demangled with `c++filt` from `aarch64-linux-gnu-binutils`).
 7. Every thread with its state and where it is.
-8. How many times the game called each SVC.
+8. With `--stub-unknown`, the service commands and services answered without being implemented.
+9. How many times the game called each SVC.
+
+Service requests appear as SendSyncRequest lines with the service, the command and what it did, for example `SendSyncRequest(handle=0xb0012) fs IStorage Read(romfs, offset 0x0, size 0x50)`. The game's own log messages appear as `lm ILogger Log` lines.
 
 The log describes the game's code, so it must stay outside the repository like any other output from a dump.

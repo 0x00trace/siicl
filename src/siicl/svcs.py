@@ -12,13 +12,17 @@ import hashlib
 import struct
 from collections.abc import Callable
 
+from siicl import ipc, services
 from siicl.addrspace import AddressSpaceError, MemoryAttribute, MemoryState, perm_text
 from siicl.cpu import PAGE, READ, WRITE, Stop
 from siicl.kernel import (
     COUNTER_SVC,
     PROCESS_ID,
     End,
+    Event,
     Process,
+    ReadableEvent,
+    SharedMemory,
     SyncObject,
     Thread,
     Unimplemented,
@@ -188,6 +192,11 @@ def set_heap_size(p: Process, t: Thread) -> str:
     return args + _result(p, OK, f", heap at {heap.start:#x}")
 
 
+# Memory states SetMemoryPermission may change: the heap, and the .data and .bss of the modules, which
+# the libraries make partly read-only after relocating them.
+_REPROTECTABLE = {MemoryState.NORMAL, MemoryState.CODE_DATA, MemoryState.ALIAS_CODE_DATA}
+
+
 @handles(0x02)
 def set_memory_permission(p: Process, t: Thread) -> str:
     address, size, perm = p.cpu.x(0), p.cpu.x(1), _w(p, 2)
@@ -197,7 +206,7 @@ def set_memory_permission(p: Process, t: Thread) -> str:
     if perm not in (0, READ, RW):
         return args + _result(p, INVALID_NEW_MEMORY_PERMISSION)
     blocks = _blocks(p, address, size)
-    if blocks is None or any(b.state != MemoryState.NORMAL or b.attribute for b in blocks):
+    if blocks is None or any(b.state not in _REPROTECTABLE or b.attribute for b in blocks):
         return args + _result(p, INVALID_CURRENT_MEMORY)
     p.space.update(address, size, perm=perm)
     return args + _result(p, OK)
@@ -223,6 +232,10 @@ def set_memory_attribute(p: Process, t: Thread) -> str:
     return args + _result(p, OK)
 
 
+# Memory states MapMemory may take pages from: the heap, and the .data and .bss of the modules.
+_ALIASABLE = {MemoryState.NORMAL, MemoryState.CODE_DATA, MemoryState.ALIAS_CODE_DATA}
+
+
 @handles(0x04)
 def map_memory(p: Process, t: Thread) -> str:
     dst, src, size = p.cpu.x(0), p.cpu.x(1), p.cpu.x(2)
@@ -234,11 +247,11 @@ def map_memory(p: Process, t: Thread) -> str:
     blocks = _blocks(p, src, size)
     if not p.space.is_free(dst, size) or blocks is None:
         return args + _result(p, INVALID_CURRENT_MEMORY)
-    if any((b.state, b.perm, b.attribute) != (MemoryState.NORMAL, RW, 0) for b in blocks):
+    if any(b.state not in _ALIASABLE or (b.perm, b.attribute) != (RW, 0) for b in blocks):
         return args + _result(p, INVALID_CURRENT_MEMORY)
     for b in blocks:
         p.space.map(
-            dst + b.start - src, b.size, RW, MemoryState.STACK, "alias of heap", memory=b.memory, offset=b.offset
+            dst + b.start - src, b.size, RW, MemoryState.STACK, f"alias of {b.name}", memory=b.memory, offset=b.offset
         )
     p.space.update(src, size, perm=0, attribute=MemoryAttribute.LOCKED)
     return args + _result(p, OK)
@@ -823,8 +836,115 @@ def exit_process(p: Process, t: Thread) -> End:
     return End("exit", "the game called ExitProcess", t)
 
 
+# IPC
+
+
 @handles(0x1F)
 def connect_to_named_port(p: Process, t: Thread) -> str:
     raw = p.cpu.read(p.cpu.x(1), 12)
     name = raw.split(b"\0", 1)[0].decode("ascii", "replace")
-    raise Unimplemented(f'SVC 0x1F (ConnectToNamedPort) to port "{name}" is not implemented')
+    if name != "sm:":
+        raise Unimplemented(f'SVC 0x1F (ConnectToNamedPort) to port "{name}" is not implemented')
+    handle = p.handles.add(services.Session(services.sm.ServiceManager(p)))
+    p.cpu.set_x(1, handle)
+    return f"({name!r})" + _result(p, OK, f", handle {handle:#x}")
+
+
+def _request(p: Process, t: Thread, handle: int, address: int, size: int) -> str:
+    try:
+        session = p.handles.get(handle)
+    except KeyError:
+        session = None
+    if not isinstance(session, services.Session):
+        return f"(handle={handle:#x})" + _result(p, INVALID_HANDLE)
+    text = services.handle_request(p, t, session, address, size)
+    p.cpu.set_x(0, OK)
+    return f"(handle={handle:#x}) {text}"
+
+
+@handles(0x21)
+def send_sync_request(p: Process, t: Thread) -> str:
+    return _request(p, t, _w(p, 0), t.tls, ipc.MESSAGE_SIZE)
+
+
+@handles(0x22)
+def send_sync_request_with_user_buffer(p: Process, t: Thread) -> str:
+    return _request(p, t, _w(p, 2), p.cpu.x(0), p.cpu.x(1))
+
+
+# Events and shared memory
+
+
+def _event(p: Process, handle: int) -> Event | ReadableEvent | None:
+    obj = p.object_for(handle)
+    return obj if isinstance(obj, Event | ReadableEvent) else None
+
+
+@handles(0x11)
+def signal_event(p: Process, t: Thread) -> str:
+    handle = _w(p, 0)
+    event = _event(p, handle)
+    if not isinstance(event, Event):
+        return f"(handle={handle:#x})" + _result(p, INVALID_HANDLE)
+    event.signal(p)
+    return f"(handle={handle:#x})" + _result(p, OK)
+
+
+@handles(0x12)
+def clear_event(p: Process, t: Thread) -> str:
+    handle = _w(p, 0)
+    event = _event(p, handle)
+    if event is None:
+        return f"(handle={handle:#x})" + _result(p, INVALID_HANDLE)
+    (event if isinstance(event, Event) else event.event).clear()
+    return f"(handle={handle:#x})" + _result(p, OK)
+
+
+@handles(0x17)
+def reset_signal(p: Process, t: Thread) -> str:
+    handle = _w(p, 0)
+    event = _event(p, handle)
+    if not isinstance(event, ReadableEvent):
+        return f"(handle={handle:#x})" + _result(p, INVALID_HANDLE)
+    if not event.signaled:
+        return f"(handle={handle:#x})" + _result(p, INVALID_STATE)
+    event.signaled = False
+    return f"(handle={handle:#x})" + _result(p, OK)
+
+
+@handles(0x13)
+def map_shared_memory(p: Process, t: Thread) -> str:
+    handle, address, size, perm = _w(p, 0), p.cpu.x(1), p.cpu.x(2), _w(p, 3)
+    args = f"(handle={handle:#x}, address={address:#x}, size={size:#x}, perm={perm_text(perm)})"
+    shared = p.object_for(handle)
+    if not isinstance(shared, SharedMemory):
+        return args + _result(p, INVALID_HANDLE)
+    if (bad := _pages(address, size)) is not None:
+        return args + _result(p, bad)
+    if size != shared.size:
+        return args + _result(p, INVALID_SIZE)
+    if perm not in (READ, RW):
+        return args + _result(p, INVALID_NEW_MEMORY_PERMISSION)
+    layout = p.space.layout
+    if any(
+        r.contains(address, 1) or r.contains(address + size - 1, 1) for r in (layout.heap, layout.alias, layout.stack)
+    ):
+        return args + _result(p, INVALID_MEMORY_REGION)
+    if not p.space.is_free(address, size):
+        return args + _result(p, INVALID_CURRENT_MEMORY)
+    p.space.map(address, size, perm, MemoryState.SHARED, f"shared memory ({shared.name})", memory=shared.memory)
+    return args + _result(p, OK, f", {shared.name}")
+
+
+@handles(0x14)
+def unmap_shared_memory(p: Process, t: Thread) -> str:
+    handle, address, size = _w(p, 0), p.cpu.x(1), p.cpu.x(2)
+    args = f"(handle={handle:#x}, address={address:#x}, size={size:#x})"
+    shared = p.object_for(handle)
+    if not isinstance(shared, SharedMemory):
+        return args + _result(p, INVALID_HANDLE)
+    blocks = _blocks(p, address, size)
+    if blocks is None or any(b.state != MemoryState.SHARED or b.memory is not shared.memory for b in blocks):
+        return args + _result(p, INVALID_CURRENT_MEMORY)
+    p.space.unmap(address, size)
+    return args + _result(p, OK)

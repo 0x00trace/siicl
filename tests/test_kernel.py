@@ -658,3 +658,114 @@ def test_busy_threads_on_two_cores_both_make_progress(tmp_path):
         seconds=0.1,
     )
     assert end.reason == "exit"
+
+
+def _bytes(data: bytes) -> str:
+    return ".byte " + ", ".join(str(b) for b in data)
+
+
+def test_a_program_reaches_a_service_and_maps_its_shared_memory(tmp_path):
+    from siicl import ipc
+
+    get_time = ipc.build(type=ipc.TIPC_FIRST + 1, data=b"time:u".ljust(8, b"\0"), align_data=False)
+    get_shared = ipc.build(type=4, data=struct.pack("<IIII", ipc.CMIF_IN, 0, 20, 0))
+    shared_at = LAYOUT_39BIT.code.start + 0x4000_0000
+    p, end, log = run(
+        tmp_path,
+        f"""
+        adr x1, port
+        svc #0x1f
+        mov w19, w1
+        mrs x20, tpidrro_el0
+        adr x1, get_time
+        mov x2, #{len(get_time)}
+        bl copy
+        mov w0, w19
+        svc #0x21
+        ldr w21, [x20, #12]
+        ldr w22, [x20, #16]
+        adr x1, get_shared
+        mov x2, #{len(get_shared)}
+        bl copy
+        mov w0, w21
+        svc #0x21
+        ldr w23, [x20, #12]
+        mov w0, w23
+        ldr x1, ={shared_at:#x}
+        mov x2, #0x1000
+        mov w3, #1
+        svc #0x13
+        mov x24, x0
+        ldr x2, ={shared_at:#x}
+        ldr x25, [x2, #0x100]
+        svc #0x07
+    copy:
+        ldrb w3, [x1], #1
+        strb w3, [x20], #1
+        subs x2, x2, #1
+        b.ne copy
+        mrs x20, tpidrro_el0
+        ret
+    port:
+        .asciz "sm:"
+        .balign 4
+    get_time:
+        {_bytes(get_time)}
+        .balign 4
+    get_shared:
+        {_bytes(get_shared)}
+        """,
+    )
+    assert end.reason == "exit", end.message
+    assert p.cpu.x(22) == 0  # the TIPC result
+    assert p.cpu.x(24) == 0
+    from siicl.services import time
+
+    assert p.cpu.x(25).to_bytes(8, "little") == time.CLOCK_SOURCE_ID[:8]
+    assert "sm: GetServiceHandle('time:u') -> time" in log
+    assert "MapSharedMemory(" in log and "-> ok, time" in log
+
+
+def test_events_signal_waiters_and_reset(tmp_path):
+    event = kernel.Event("test")
+    p = kernel.Process(
+        {
+            "rtld": build_nso(
+                assemble(
+                    """
+        sub sp, sp, #16
+        mov w0, #1
+        movk w0, #1, lsl #16
+        str w0, [sp]
+        mov x1, sp
+        mov w2, #1
+        mov x3, #0
+        svc #0x18
+        mov x19, x0
+        mov w0, #1
+        movk w0, #1, lsl #16
+        svc #0x17
+        mov x20, x0
+        mov x1, sp
+        mov w2, #1
+        mov x3, #0
+        svc #0x18
+        mov x21, x0
+        mov w0, #1
+        movk w0, #1, lsl #16
+        svc #0x17
+        mov x22, x0
+        svc #0x07
+        """,
+                    tmp_path,
+                ),
+                bss=0,
+            )
+        },
+        npdm(),
+    )
+    assert p.handles.add(event.readable) == 0x10001
+    event.signal(p)
+    end = p.run(io.StringIO(), max_seconds=1)
+    assert end.reason == "exit"
+    assert [p.cpu.x(n) for n in (19, 20, 21, 22)] == [0, 0, svcs.TIMED_OUT, svcs.INVALID_STATE]

@@ -12,7 +12,23 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from siicl import a64scan, addrspace, boot, cpu, kernel, loader, npdm, nso, nup, nvshader, paths, sass, vipr, vzip
+from siicl import (
+    a64scan,
+    addrspace,
+    boot,
+    cpu,
+    kernel,
+    loader,
+    npdm,
+    nso,
+    nup,
+    nvshader,
+    paths,
+    romfs,
+    sass,
+    vipr,
+    vzip,
+)
 from siicl.report import ModuleScan, Report, to_dict, to_markdown
 
 EXEFS_MODULES = (
@@ -111,6 +127,20 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _romfs_image(reader: nup.NupReader) -> romfs.RomFsImage | None:
+    """The romfs files of a NUP container as one RomFS image, or None if it has none."""
+    files = []
+    for e in reader.files:
+        if not e.path.startswith("romfs/"):
+            continue
+        if e.compression == nup.COMPRESSION_NONE:
+            files.append(romfs.RomFile(e.path[6:], e.size, lambda off, n, e=e: reader.read_range(e, off, n)))
+        else:
+            data = reader.read(e)
+            files.append(romfs.RomFile(e.path[6:], e.size, lambda off, n, data=data: data[off : off + n]))
+    return romfs.RomFsImage(files) if files else None
+
+
 def cmd_boot(args: argparse.Namespace) -> int:
     source = Path(args.file).expanduser()
     title_id, mods, npdm_raw = _load_exefs(source)
@@ -121,12 +151,18 @@ def cmd_boot(args: argparse.Namespace) -> int:
     out_dir = paths.ensure_outside_repo(Path(args.out) if args.out else paths.cache_dir() / label)
     out_dir.mkdir(parents=True, exist_ok=True)
     process = kernel.Process(mods, npdm.parse(npdm_raw) if npdm_raw else None)
+    process.stub_unknown = args.stub_unknown
     log_path = out_dir / "boot.log"
+    reader = nup.NupReader(source) if not source.is_dir() else None
+    if reader is not None:
+        process.romfs = _romfs_image(reader)
     with log_path.open("w") as log:
         print(
             f"siicl boot log for {source.name}" + (f", title {title_id:016X}" if title_id is not None else ""), file=log
         )
         end = boot.boot(process, log, max_seconds=args.seconds)
+    if reader is not None:
+        reader.close()
     print(f"stopped at {process.seconds:.6f} s: {boot.describe_end(process, end)}")
     print(f"Wrote {log_path}", file=sys.stderr)
     return 0
@@ -583,6 +619,11 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--out", help="output folder for boot.log (default ~/.cache/siicl/<title id>)")
     bt.add_argument(
         "--seconds", type=float, default=60.0, help="stop after this much guest time, in seconds (default 60)"
+    )
+    bt.add_argument(
+        "--stub-unknown",
+        action="store_true",
+        help="answer service commands siicl does not implement with success, and list them, instead of stopping",
     )
     bt.set_defaults(func=cmd_boot)
 

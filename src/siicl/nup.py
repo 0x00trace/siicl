@@ -244,6 +244,14 @@ class NupReader:
             raise NupError(f"{entry.path} does not match its SHA-256 hash")
         return data
 
+    def read_range(self, entry: NupFile, offset: int, size: int) -> bytes:
+        """Part of a file that is stored without compression, without checking its hash."""
+        if entry.compression != COMPRESSION_NONE:
+            raise NupError(f"{entry.path} is compressed, so it can only be read whole")
+        size = max(0, min(size, entry.size - offset))
+        self._f.seek(entry.offset + offset)
+        return self._f.read(size)
+
     def peek(self, entry: NupFile, n: int) -> bytes:
         """Return the first `n` stored bytes of an entry, without decompressing or checking it."""
         self._f.seek(entry.offset)

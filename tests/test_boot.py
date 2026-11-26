@@ -27,7 +27,7 @@ CONNECT = """
     adr x1, name
     svc #0x1f
 name:
-    .asciz "sm:"
+    .asciz "dbg:"
 """
 
 
@@ -112,7 +112,7 @@ def test_boot_log_lists_each_svc_and_the_one_that_is_missing(tmp_path):
     text = log.getvalue()
     assert end.reason == "unimplemented"
     assert "t0  SetHeapSize(size=0x200000) -> ok, heap at 0x2000000000" in text
-    assert 'SVC 0x1F (ConnectToNamedPort) to port "sm:" is not implemented, at rtld+0xc' in text
+    assert 'SVC 0x1F (ConnectToNamedPort) to port "dbg:" is not implemented, at rtld+0xc' in text
     assert "        1 SetHeapSize" in text
 
 
@@ -128,7 +128,7 @@ def test_boot_command_writes_the_log_outside_the_repo(tmp_path, capsys):
     src.write_bytes(container)
     out = tmp_path / "out"
     assert cli.main(["boot", str(src), "--out", str(out)]) == 0
-    expected = 'SVC 0x1F (ConnectToNamedPort) to port "sm:" is not implemented, at rtld+0x4 (0x8000004), in thread 0'
+    expected = 'SVC 0x1F (ConnectToNamedPort) to port "dbg:" is not implemented, at rtld+0x4 (0x8000004), in thread 0'
     assert expected in capsys.readouterr().out
     text = (out / "boot.log").read_text()
     assert text.startswith("siicl boot log for game.nup, title 0400000000001000")

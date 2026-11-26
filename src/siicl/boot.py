@@ -73,10 +73,16 @@ def write_end(process: Process, end: End, log: TextIO) -> None:
         print("backtrace:", file=log)
         pc = end.stop.pc if end.stop else cpu.pc
         for n, (address, how) in enumerate(backtrace(process, pc)):
-            print(f"  #{n:<2} {address:#012x} {process.describe_address(address)}{how}", file=log)
+            name = process.symbol_name(address)
+            name = f" {name}" if name else ""
+            print(f"  #{n:<2} {address:#012x} {process.describe_address(address)}{how}{name}", file=log)
     print("threads:", file=log)
     for t in process.threads:
         print(f"  {t.describe()}, at {process.describe_address(t.pc)}", file=log)
+    if process.stubbed:
+        print("service commands answered with success because siicl does not implement them:", file=log)
+        for name in dict.fromkeys(process.stubbed):
+            print(f"  {process.stubbed.count(name):>9,} {name}", file=log)
     if process.svc_counts:
         print("SVC calls:", file=log)
         for name, count in process.svc_counts.most_common():

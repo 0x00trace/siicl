@@ -134,6 +134,46 @@ class Thread(SyncObject):
         )
 
 
+class ReadableEvent(SyncObject):
+    """The side of an event that threads wait for."""
+
+    def __init__(self, event: Event) -> None:
+        super().__init__()
+        self.event = event
+        self.signaled = False
+
+    def is_signaled(self) -> bool:
+        return self.signaled
+
+
+class Event:
+    """An event, as a service hands one out: it signals its readable side."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.readable = ReadableEvent(self)
+
+    def signal(self, process: Process) -> None:
+        if not self.readable.signaled:
+            self.readable.signaled = True
+            self.readable.wake_waiters(process)
+
+    def clear(self) -> None:
+        self.readable.signaled = False
+
+
+class SharedMemory:
+    """Memory a service shares with the game, which maps it with MapSharedMemory."""
+
+    def __init__(self, name: str, size: int) -> None:
+        from siicl.addrspace import HostMemory
+
+        self.name = name
+        self.size = size
+        self.memory = HostMemory(size)
+        self.view = memoryview(self.memory._map)
+
+
 class HandleTable:
     """Handles as the kernel makes them: a slot index in the low 15 bits and a serial number above it."""
 
@@ -187,12 +227,17 @@ class Process:
         self.allowed_svcs = set(caps.svcs) if caps and caps.svcs else None
         self.ideal_core = npdm.main_thread_core if npdm else self.cores[0]
         self.queues: dict[int, list[Thread]] = {c: [] for c in self.cores}
+        self.services: dict[str, object] = {}  # state the services keep for the process
+        self.romfs = None  # the game's romfs image (siicl.romfs.RomFsImage), if it has one
+        self.stub_unknown = False  # answer unknown service commands with success instead of ending the run
+        self.stubbed: list[str] = []
         self.condvar_waiters: list[Thread] = []
         self.arbiter_waiters: list[Thread] = []
         self.current: Thread | None = None
         self.log: TextIO | None = None
         self.svc_counts: Counter[str] = Counter()
         self._next_core = 0
+        self._symbols = None
         self.user_exception_context = 0
         stack_size = npdm.main_thread_stack_size if npdm else DEFAULT_STACK_SIZE
         stack = self.space.map_free(
@@ -386,6 +431,34 @@ class Process:
             self._time_out()
 
     # Logs
+
+    @property
+    def symbols(self):
+        """The modules' dynamic symbols, read once, when a log first needs a name."""
+        if self._symbols is None:
+            from siicl.symbols import SymbolTable, module_symbols
+
+            found = []
+            for m in self.modules:
+                try:
+                    found += module_symbols(self.cpu.read, m.base, self.cpu.read(m.text.start, 8))
+                except GuestMemoryError, struct.error:
+                    continue
+            self._symbols = SymbolTable(found)
+        return self._symbols
+
+    def symbol_name(self, address: int, *, demangle: bool = True) -> str:
+        """The function that holds address, as "name+0x10", or an empty string."""
+        found = self.symbols.lookup(address)
+        if found is None:
+            return ""
+        sym, offset = found
+        name = sym.name
+        if demangle:
+            from siicl.symbols import demangle as demangle_names
+
+            name = demangle_names([name])[0]
+        return f"{name}+{offset:#x}"
 
     def module_at(self, address: int) -> loader.Module | None:
         return next((m for m in self.modules if m.contains(address)), None)

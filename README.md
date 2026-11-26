@@ -13,7 +13,7 @@ SIICL is a research project toward a Switch 2 compatibility layer for Linux, to 
 
 Reports go to `~/.cache/siicl/<title id>/` as `report.md` and `report.json`.
 
-- `siicl boot` loads a game's executables into a guest address space and runs its threads in a CPU emulator, handling their memory, thread and synchronization SVCs, until the game needs something siicl does not implement yet. It writes every SVC, then where and why the run ended, with the registers and a backtrace, to `~/.cache/siicl/<title id>/boot.log`.
+- `siicl boot` loads a game's executables into a guest address space and runs its threads in a CPU emulator. It handles their SVCs and answers their requests to system services (applet, time, file system with the romfs, accounts, network), until the game needs something siicl does not implement yet. It writes every SVC and service request, the game's own log messages, then where and why the run ended, with the registers and a named backtrace, to `~/.cache/siicl/<title id>/boot.log`.
 
 - `siicl vzip` reads the VZIP archive that holds a game's data (the romfs of a NUP container):
   - `stats`: a summary and a count of file types
