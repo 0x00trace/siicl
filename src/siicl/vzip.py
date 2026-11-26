@@ -57,8 +57,13 @@ def fnv1a32(data: bytes) -> int:
 
 
 def name_for_path(path: str) -> str:
-    """The archive's name for an asset path: FNV-1a 64 of the path without its leading '/', in hex."""
-    return format(fnv1a64(path.lstrip("/").encode()), "x")
+    """The archive's name for an asset path.
+
+    This is FNV-1a 64 of the path without its leading '/', with the letters A-Z
+    lowercased (as the game's lookup does), written in hex.
+    """
+    p = path[1:] if path.startswith("/") else path
+    return format(fnv1a64(bytes(c + 0x20 if 0x41 <= c <= 0x5A else c for c in p.encode())), "x")
 
 
 def key_for_name(name: str) -> int:

@@ -227,3 +227,8 @@ def test_cli_paths_and_extract_by_path(tmp_path, capsys):
     dest = tmp_path / "out"
     assert cli.main(["vzip", "extract", str(src), "--out", str(dest), "--path", "data/tex/y.png.import"]) == 0
     assert (dest / texture).read_bytes() == b"pixels"
+
+
+def test_path_names_ignore_letter_case():
+    # The game's archive lookup lowercases A-Z before hashing a path.
+    assert vzip.name_for_path("Data/Shaders/A.GLSL.import") == vzip.name_for_path("data/shaders/a.glsl.import")
