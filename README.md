@@ -1,6 +1,6 @@
 # SIICL
 
-SIICL is a research project toward a Switch 2 compatibility layer for Linux, to run your own Switch 2 game dumps. It is at the first step: measuring what a game needs before any of the layer is designed.
+SIICL is a research project toward a Switch 2 compatibility layer for Linux, to run your own Switch 2 game dumps. It is at the first step: measuring what a game needs before any of the layer is designed. The next goal is in [docs/roadmap.md](docs/roadmap.md): boot a game and show the first frame it presents.
 
 ## What it does today
 
