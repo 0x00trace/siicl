@@ -140,27 +140,62 @@ Supervisor:
 | 1101, 1102 | `nn::gs::sdk::BootGraphicsFrameManagement` | Nothing | Result |
 | 497 | `nn::gpu::sdk::BootWithRemoteMemory` | A u64 (4 in the sample) | Handle: a session (see below) |
 | 401, 402, 301 | `BootGraphicsSystem` | Nothing | Result |
+| 434 | NVN's device setup | A u32 (1 in the sample) | Result |
 | 305 | the same | Two u32s (0x20000 and 3 in the sample) | Handle: a session for the display library, `nn::vi2` |
 
 The session from 202: command 1 returns a u32, which must be below 0x400; command 21 sends it back, capped at 63. siicl answers 63.
 
-The session from 497:
+The session from 497 (its clients are in `nn::gpu::sdk`):
 
 - Command 11 returns a range of bit positions, low then high. The client makes a 64-bit mask of the bits from low to high. siicl offers 0 to 63.
-- Command 12 takes an index and returns an event.
+- Command 12 takes an index and returns that index's event. Index 1 is GPU address space 1's sync event: the client waits on it after each change to the address space.
 - Command 21 takes an index. The client then waits on that index's event, so siicl signals it at once.
-- Command 22 returns a handle whose use is not known yet.
+- Command 22 returns a session for the GPU memory manager (below).
+- Command 33 takes an index and returns a u32 the client uses as a count. siicl answers 1.
+- Command 41 comes from `nn::gpu::sdk::CreateGraphicsDevice` with a device name ("NvRmGpu"), and returns a byte the client keeps. siicl answers 0.
+- Command 203 takes a name ("Gpu") and returns three u64s: whether there is a range (it must be below 5; 0 means none), then the range's lowest and highest GPU address. The SDK keeps it as the user partition of the GPU address space (`GetUserPartitionGpuAddressMin` and `Max`). NVN reserves the GPU addresses that mirror the CPU's there (0x8000000 to 0x8000000000) and then allocates more, so siicl gives 0x8000000 to 0xA000000000.
+- Command 202 takes an index and returns two u64s, which the SDK keeps as the supervisor's partition (`GetGsvPartitionGpuAddressMin` and `Max`). siicl gives the rest of the game's range, 0xA000000000 to 0xC000000000.
+
+The GPU memory manager, from the 497 session's command 22:
+
+- Command 101 comes from `nn::gpu::sdk::CreateGpuAccessibleMemory`: the first and last address of the memory. It returns a u32 memory handle.
+- Command 211 comes from `nn::gpu::sdk::NormalMapGpuMemory4K`: the address space's index, the first and last GPU address, the memory handle, the offset into it, then permissions, cacheability and flags. The client then waits on that address space's sync event. siicl records the mapping (`siicl.services.gfx.GpuMemory`, which turns GPU addresses back into CPU addresses) and signals the event. In the sample the GPU address equals the CPU address.
+- Commands 213 and 102 undo 211 and 101 in the sample; siicl does not implement them yet.
 
 The display session from 305:
 
 - Command 3 returns a u32 below 8, and command 1 a u32 below 0x400. siicl answers 1 to both.
 - Command 11 takes a u32 and returns an event, which the client polls until it is signaled. siicl hands it out already signaled.
 - Command 21 returns a result.
+- Command 31 takes a u32 and returns an event, which the game resets.
 - Command 101 takes a display name ("default") and a u32.
+- Command 263 takes a display name ("default") and returns a result.
 
 After command 204, the client checks a header that the supervisor should have written at the start of the read-only transfer memory, made of 32-bit words: 1, a value, a size below 0x1000, then five offsets. Three of the offsets point into the read-only memory and two into the read-write memory. So the supervisor and the game talk through queues in that shared memory, signalled by the two events. siicl writes a header with values that pass the client's checks, but it does not serve the queues yet. Their values are guesses, and the sample has not used the queues so far. Closing the game's handles to the transfer memories does not give the pages back, because the supervisor still holds them, as on the console.
 
-`nvsrv` speaks CMIF. Its first command in the sample, 13, comes from `NvOsDrvAttach` with a 1 as its argument, which fits `nvdrv`'s command 13 on the Switch 1 (SetGraphicsFirmwareMemoryMarginEnabled).
+### The GPU driver
+
+`nvsrv`, the GPU driver service, speaks CMIF and uses the commands of the Switch 1's `nvdrv` (`siicl.services.nv`): Open (a device path), Ioctl, Ioctl2, Ioctl3, Close, QueryEvent, SetAruid and SetGraphicsFirmwareMemoryMarginEnabled. Ioctl request numbers have the Linux layout (direction, size, type, number). siicl finds a device's handler by type and number, because argument sizes differ from the Switch 1. An unknown device or ioctl ends the run, with its request and input in the message.
+
+`/dev/nvhost-ctrl-gpu`:
+
+- 'G' 5, GetCharacteristics, with a 0xE0-byte argument: the buffer size and address, then a 0xD0-byte characteristics structure (0xA0 bytes on the Switch 1). Up to 0x70, the structure has the Switch 1 fields (Linux `nvgpu`'s `nvgpu_gpu_characteristics`). NVN combines the architecture and implementation into a chip ID and looks it up in its table of supported chips: 0x17E is "GA10F", the Switch 2's GPU (the table also has the Switch 1's 0x12B and 0x12E). siicl describes architecture 0x170, implementation 0xE, and the Ampere engine classes (3D 0xC797, compute 0xC7C0, channel 0xC76F, copy 0xC7B5). At 0x70 come nine signed 16-bit values that NVN compares like `nvgpu`'s interface levels (the last ioctl number of each driver interface). It refuses a value at 0x78 below 6, and turns features on above 7, 0xA, 0x12, 0x1F, 0x24, 0x26 and 0x2A. siicl gives 0x40 to all but the first, which gets 0x12: from 0x13 on, NVN maps its SMs with the VsmsMapping ioctl and checks the answer, and siicl does not know that ioctl's format yet.
+- 'G' 6, GetTpcMasks: one GPC with six TPCs.
+- 'G' 19, VsmsMapping on the Switch 1: siicl leaves the argument zeroed.
+- QueryEvent hands out an event for each fd and event number.
+
+`/dev/nvhost-as-gpu`, a GPU address space:
+
+- 'A' 9, InitializeEx: the game sets the range of GPU addresses (0x8000000 to 0xC000000000 in the sample).
+- 'A' 8, GetVaRegions: siicl reports small (4 KiB) pages below 16 GiB and big (128 KiB) pages above. Ioctl3 also returns the regions in its second output.
+
+The SDK keeps its own model of each GPU address space (`nn::gpu::sdk::util`'s "virtual machine"). It answers AllocSpace and the other address-space ioctls itself, within the partitions the supervisor reported, and sends only some of them to `nvsrv`.
+
+`/dev/nvhost-prof-gpu`, the GPU profiler: Open fails, as on a retail console.
+
+SVC 0x80, SetGpuMemoryAttribute (an address, a size, a mask and a value): siicl records the bits for the range. switchbrew does not say what they mean.
+
+In the sample, NVN's device setup now opens the GPU device and the address space, reserves the CPU mirror, creates and maps two areas of GPU memory, and then undoes it all and aborts. The step that fails comes after the mappings and does not show in the log yet.
 
 With these answers, `BootGraphicsSystem` finishes in the sample, and the game goes on to initialize input (`hid`).
 

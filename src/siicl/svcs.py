@@ -937,6 +937,22 @@ def create_transfer_memory(p: Process, t: Thread) -> str:
     return args + _result(p, OK, f", handle {handle:#x}")
 
 
+@handles(0x80)
+def set_gpu_memory_attribute(p: Process, t: Thread) -> str:
+    """A Switch 2 SVC (X0 address, X1 size, W2 mask, W3 value; see switchbrew). switchbrew does not say
+    what the bits mean; siicl records them for each range and changes nothing else."""
+    address, size, mask, value = p.cpu.x(0), p.cpu.x(1), _w(p, 2), _w(p, 3)
+    args = f"(address={address:#x}, size={size:#x}, mask={mask:#x}, value={value:#x})"
+    if (bad := _pages(address, size)) is not None:
+        return args + _result(p, bad)
+    if _blocks(p, address, size) is None:
+        return args + _result(p, INVALID_CURRENT_MEMORY)
+    attributes = p.services.setdefault("gpu memory attributes", {})
+    old = attributes.get((address, size), 0)
+    attributes[(address, size)] = (old & ~mask) | (value & mask)
+    return args + _result(p, OK)
+
+
 @handles(0x13)
 def map_shared_memory(p: Process, t: Thread) -> str:
     handle, address, size, perm = _w(p, 0), p.cpu.x(1), p.cpu.x(2), _w(p, 3)

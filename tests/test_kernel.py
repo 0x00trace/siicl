@@ -857,3 +857,25 @@ def test_shared_memory_without_a_size_takes_the_size_of_its_first_mapping(tmp_pa
     assert p.handles.add(shared) == 0x10001
     p.run(io.StringIO(), max_seconds=1)
     assert (p.cpu.x(19), p.cpu.x(20), shared.size) == (0, svcs.INVALID_SIZE, 0x3000)
+
+
+def test_set_gpu_memory_attribute_records_the_bits(tmp_path):
+    p, end, log = run(
+        tmp_path,
+        HEAP_SETUP
+        + """
+        mov x0, x19
+        mov x1, #0x2000
+        mov w2, #0x20
+        mov w3, #0x20
+        svc #0x80
+        mov x20, x0
+        add x0, x19, #8
+        mov x1, #0x1000
+        svc #0x80
+        mov x21, x0
+        svc #0x07
+        """,
+    )
+    assert (p.cpu.x(20), p.cpu.x(21)) == (0, svcs.INVALID_ADDRESS)
+    assert p.services["gpu memory attributes"] == {(HEAP, 0x2000): 0x20}
