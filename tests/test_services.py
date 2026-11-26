@@ -233,3 +233,27 @@ def test_the_display_session_opens_the_default_display():
     assert text == "vi2 session command 101 (open display)('default', 1)"
     _, msg = send(p, session, tipc(11, struct.pack("<I", 1)))
     assert p.handles.get(msg.move_handles[0]).signaled
+
+
+def test_hid_hands_out_shared_memory_that_takes_the_size_the_game_maps(tmp_path):
+    from siicl.services import hid
+
+    p = process()
+    session = services.Session(hid.Hid(p))
+    _, msg = send(p, session, cmif(0, struct.pack("<Q", 0x51), pid=0))
+    resource = p.handles.get(msg.move_handles[0])
+    _, msg = send(p, resource, cmif(0))
+    shared = p.handles.get(msg.copy_handles[0])
+    assert shared.size is None
+    shared.allocate(0x40000)
+    assert shared.size == 0x40000 and len(shared.view) == 0x40000
+
+
+def test_the_application_gets_an_operation_mode_event_and_a_graphics_scale():
+    p = process()
+    functions = services.Session(applet.ApplicationFunctions(p))
+    _, msg = send(p, functions, cmif(210))
+    assert p.handles.get(msg.copy_handles[0]).signaled
+    scaling = services.Session(applet.GraphicsScalingParametersFunctions(p))
+    _, msg = send(p, scaling, cmif(10))
+    assert response(msg)[1][:4] == struct.pack("<I", 10)

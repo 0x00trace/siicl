@@ -116,8 +116,9 @@ Services so far, each with the commands the sample has used:
 | `bsd:u`, `bsd:s` | Socket clients register; nothing connects |
 | `acc:u0` | One user account |
 | `ldr:ro` | Takes the process handle |
+| `hid` | Input: the applet resource and its shared memory, which stays zeroed, so no controllers are connected. The memory takes the size of its first mapping (0x40000 bytes in the sample, as on the Switch 1). |
 | Graphics supervisor | Reached with ISelfController GetGraphicsSupervisor, not through `sm:`. Its sessions include the display library's. See below. |
-| `nvsrv` | The GPU driver service, handed out by the graphics supervisor. Nothing is implemented yet. |
+| `nvsrv` | The GPU driver service, handed out by the graphics supervisor. Nothing is implemented yet. In the sample its commands 0, 12 and 2 fit `nvdrv`'s Open (a device path in a buffer), Ioctl3 and Close on the Switch 1. The first ioctl is 0xC0E04705: type 'G', number 5, which on the Switch 1 is the GPU characteristics query, here with a 0xE0-byte argument. |
 
 ### The graphics supervisor
 
@@ -162,6 +163,11 @@ After command 204, the client checks a header that the supervisor should have wr
 `nvsrv` speaks CMIF. Its first command in the sample, 13, comes from `NvOsDrvAttach` with a 1 as its argument, which fits `nvdrv`'s command 13 on the Switch 1 (SetGraphicsFirmwareMemoryMarginEnabled).
 
 With these answers, `BootGraphicsSystem` finishes in the sample, and the game goes on to initialize input (`hid`).
+
+Two more applet answers the graphics setup needs:
+
+- IApplicationFunctions command 210 (20.0.0+, no name on switchbrew) hands out the event that `nn::oe::GetOperationMode` checks before it uses its cached mode. The check retries on every error except a timeout, so the handle must be a real event, or the game loops for ever.
+- IGraphicsScalingParametersFunctions command 10 returns a u32 that `nn::oe::GetCurrentGraphicsScale` turns into a scale: 10 is 0, 20 is 1, 30 is 2, and anything else aborts. siicl answers 10.
 
 ### The time shared memory
 

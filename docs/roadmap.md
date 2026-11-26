@@ -34,7 +34,7 @@ The image must come from the game's own GPU commands. If the first image the gam
 
 Each stage is a stack of pull requests. Each ends at a point that both the tests and the sample can check.
 
-Status: stages 1 to 3 are done, and stage 4 has started. On the sample, the game sets itself up through the applet, time, file system, account and network services, mounts its romfs, starts its engine, boots its graphics system through the graphics supervisor (whose commands siicl learned from the SDK's client code), opens the GPU driver service and the default display, and starts initializing input, where the run stops. See [boot.md](boot.md).
+Status: stages 1 to 3 are done, and stage 4 has started. On the sample, the game sets itself up through the applet, time, file system, account and network services, mounts its romfs, starts its engine, boots its graphics system through the graphics supervisor (whose commands siicl learned from the SDK's client code), opens the GPU driver service and the default display, initializes input, and starts using the GPU driver, where the run stops. See [boot.md](boot.md).
 
 | Stage | Work | Done when |
 |---|---|---|

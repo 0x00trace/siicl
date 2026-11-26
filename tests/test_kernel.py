@@ -822,3 +822,38 @@ def test_the_log_counts_a_line_that_repeats_instead_of_writing_it_again(tmp_path
     )
     lines = [ln for ln in log.splitlines() if "SleepThread" in ln or "more times" in ln]
     assert len(lines) == 2 and lines[1].endswith("(the line above 4 more times)")
+
+
+def test_shared_memory_without_a_size_takes_the_size_of_its_first_mapping(tmp_path):
+    shared = kernel.SharedMemory("test", None)
+    p = kernel.Process(
+        {
+            "rtld": build_nso(
+                assemble(
+                    f"""
+        mov w0, #1
+        movk w0, #1, lsl #16
+        ldr x1, ={LAYOUT_39BIT.code.start + 0x4000_0000:#x}
+        mov x2, #0x3000
+        mov w3, #1
+        svc #0x13
+        mov x19, x0
+        mov w0, #1
+        movk w0, #1, lsl #16
+        ldr x1, ={LAYOUT_39BIT.code.start + 0x5000_0000:#x}
+        mov x2, #0x1000
+        mov w3, #1
+        svc #0x13
+        mov x20, x0
+        svc #0x07
+        """,
+                    tmp_path,
+                ),
+                bss=0,
+            )
+        },
+        npdm(),
+    )
+    assert p.handles.add(shared) == 0x10001
+    p.run(io.StringIO(), max_seconds=1)
+    assert (p.cpu.x(19), p.cpu.x(20), shared.size) == (0, svcs.INVALID_SIZE, 0x3000)

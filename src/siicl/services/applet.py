@@ -36,6 +36,7 @@ class AppletState:
         self.notification_event = Event("notification storage channel")
         self.suspended_tick_event = Event("accumulated suspended tick changed")
         self.health_warning_event = Event("health warning disappeared")
+        self.operation_mode_event = Event("operation mode changed")
 
 
 def state(process) -> AppletState:
@@ -216,6 +217,18 @@ class ApplicationFunctions(Service):
     SetTerminateResult = stub(22, "SetTerminateResult", "I")
     GetDisplayVersion = stub(23, "GetDisplayVersion", "", "16s", b"1.0.0")
     NotifyRunning = stub(40, "NotifyRunning", "", "B", 0)
+
+    # A Switch 2 addition (20.0.0+) without a name on switchbrew. In the sample it hands out the event
+    # nn::oe::GetOperationMode checks (with a zero timeout, retrying on any error but a timeout) before
+    # it uses its cached mode, so it must be a real event. siicl signals it at first, so the first
+    # GetOperationMode asks for the mode.
+    @command(210, "command 210 (operation mode event)")
+    def OperationModeEvent(self, call: Call) -> int:
+        st = state(self.process)
+        st.operation_mode_event.signal(self.process)
+        call.copy(st.operation_mode_event.readable)
+        return 0
+
     # Switch 2 additions (20.0.0+) without names on switchbrew. The sample sends them without
     # arguments; siicl answers them with success and no data.
     Command320 = stub(320, "command 320")
@@ -260,6 +273,11 @@ class PerformanceFunctions(Service):
 
 class GraphicsScalingParametersFunctions(Service):
     name = "applet IGraphicsScalingParametersFunctions"
+
+    # nn::oe::GetCurrentGraphicsScale turns the u32 this returns into a scale: 10 is 0, 20 is 1, 30 is 2,
+    # and anything else aborts. siicl answers 10, the lowest.
+    GetGraphicsScale = stub(10, "command 10 (graphics scale)", None, "I", 10)
+    Command1050 = stub(1050, "command 1050", "B")
 
 
 class ApplicationProxy(Service):

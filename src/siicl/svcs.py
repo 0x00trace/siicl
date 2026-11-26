@@ -946,6 +946,8 @@ def map_shared_memory(p: Process, t: Thread) -> str:
         return args + _result(p, INVALID_HANDLE)
     if (bad := _pages(address, size)) is not None:
         return args + _result(p, bad)
+    if shared.size is None:
+        shared.allocate(size)
     if size != shared.size:
         return args + _result(p, INVALID_SIZE)
     if perm not in (READ, RW):

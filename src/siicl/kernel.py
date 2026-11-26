@@ -165,10 +165,18 @@ class Event:
 class SharedMemory:
     """Memory a service shares with the game, which maps it with MapSharedMemory."""
 
-    def __init__(self, name: str, size: int) -> None:
+    def __init__(self, name: str, size: int | None) -> None:
+        """size None: the first MapSharedMemory decides it, for memory whose size the game knows best."""
+        self.name = name
+        self.size = size
+        self.memory = None
+        self.view = None
+        if size is not None:
+            self.allocate(size)
+
+    def allocate(self, size: int) -> None:
         from siicl.addrspace import HostMemory
 
-        self.name = name
         self.size = size
         self.memory = HostMemory(size)
         self.view = memoryview(self.memory._map)
