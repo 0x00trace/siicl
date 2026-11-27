@@ -42,3 +42,12 @@ def test_refuses_game_content(repo, name, data):
 
 def test_allows_source_files(repo):
     assert _hook(repo, "src/module.py", b"print('hello')\n").returncode == 0
+
+
+def test_allows_a_submodule(repo):
+    # A submodule is staged as a commit of another repository, not as a file of this one.
+    subprocess.run(
+        ["git", "-C", str(repo), "update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},lib/sub"], check=True
+    )
+    result = subprocess.run([str(HOOK)], cwd=repo, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
