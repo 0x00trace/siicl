@@ -65,3 +65,11 @@ git config core.hooksPath .githooks
 - [docs/translation.md](docs/translation.md): the translation of compute programs to SPIR-V
 - [docs/gpu-check.md](docs/gpu-check.md): how translations are checked on a GPU, and the results on the sample
 - [docs/boot.md](docs/boot.md): how `siicl boot` loads a game and starts it, and what the boot log shows
+
+## License
+
+Copyright (C) 2026 0x00trace
+
+siicl is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 2 of the License, or (at your option) any later version. The text of version 2 is in [LICENSE](LICENSE).
+
+siicl is distributed in the hope that it will be useful, but without any warranty; without even the implied warranty of merchantability or fitness for a particular purpose. See the GNU General Public License for more details.
