@@ -1,6 +1,6 @@
 # CPU backend for real-time play
 
-siicl runs a game's AArch64 code in Unicorn ([boot.md](boot.md)). Unicorn suits milestone 1 of the [roadmap](roadmap.md): it runs every instruction the scanner finds in game code, and two runs of the same game do the same thing. It can't give the frame rate and frame pacing a game needs when someone plays it. This document records the measurements that show this, compares the backends that could replace Unicorn, and plans the change. None of it is implemented yet.
+siicl runs a game's AArch64 code in Unicorn ([boot.md](boot.md)). Unicorn suits milestone 1 of the [roadmap](roadmap.md): it runs every instruction the scanner finds in game code, and two runs of the same game do the same thing. It can't give the frame rate and frame pacing a game needs when someone plays it. This document records the measurements that show this, compares the backends that could replace Unicorn, and plans the change. Stage 1 of the plan is done ([Stage 1: the C library](#stage-1-the-c-library)); `siicl boot` still runs on Unicorn.
 
 ## Measurements of the Unicorn backend
 
@@ -48,6 +48,12 @@ It doesn't implement all of the game's instructions. Version 6.7.0 (2024-03-02) 
 
 It does decode the hint forms of pointer authentication (as `HINT`, which does nothing), `SDOT` and `UDOT`, and `FNEG` in half precision.
 
+Running one instruction of each group through the C library of stage 1 (`tests/test_dynarmic.py`) confirmed the list, and found three more groups that dynarmic doesn't run:
+
+- Half-precision arithmetic other than `FNEG`, such as `FADD` and `FMUL`. The sample uses only `FNEG`.
+- `CNTVCT_EL0`, the virtual counter. dynarmic has only `CNTPCT_EL0`, which is the counter the sample reads.
+- The performance monitor registers, such as `PMCR_EL0` and `PMCNTENSET_EL0`, which the sample's code also accesses.
+
 The original repository, `github.com/merryhime/dynarmic`, no longer exists. The AUR package builds from `github.com/lioncash/dynarmic`, and several emulator projects keep their own forks. siicl would keep its own fork as well.
 
 The work:
@@ -55,6 +61,7 @@ The work:
 - `LDAPR` as `LDAR`, which is implemented. Its ordering is stronger, so the result is correct.
 - The pointer authentication forms with the treatment siicl uses now: PAC instructions leave pointers unchanged, AUT instructions succeed, `RETAB` returns as `RET` does, `BRAA` branches as `BR` does, and `LDRAA` loads as `LDR` does with its scaled offset.
 - The LSE atomics, in one of two ways. One is a new callback that the host implements with host atomic instructions. The other is new IR operations that the x86-64 backend emits as `LOCK`-prefixed instructions and `CMPXCHG` loops. The callback is simpler; the IR operations avoid a call for each atomic.
+- `CNTVCT_EL0` with the value of `CNTPCT_EL0`, and the performance monitor registers. What a game sees when it accesses those registers on the console isn't known yet; Unicorn's result is the reference until it is.
 - A small C++ library with a C interface around dynarmic, so that Python (through `ctypes`) and later code in a compiled language can call it.
 
 ### A QEMU fork
@@ -95,16 +102,42 @@ Stages 1 to 3 keep Unicorn as the default backend and leave the kernel as it is,
 
 | Stage | Work | Done when |
 |---|---|---|
-| 1. Fork and build | Fork dynarmic 6.7.0 and build it with CMake. Its source includes the libraries it uses (`externals/`) except Boost, which comes from the Arch package `boost`. Write the C library: create a core, read and write registers, set the page table, run for a number of ticks, and report why a run stopped. Load it with `ctypes`, as siicl loads liblz4 and libvulkan. | A test runs a synthetic program on dynarmic from Python. |
+| 1. Build and C library | Done. dynarmic 6.7.0 is the git submodule `native/dynarmic`, unchanged, from `github.com/lioncash/dynarmic`; the fork is made in stage 2, with the first change to dynarmic. `native/siicl_dynarmic.cpp` is the C library: create a machine and its cores, map pages, read and write registers, run for a number of ticks, and report why a run stopped. `siicl.dynarmic` loads it with `ctypes`, as siicl loads liblz4 and libvulkan. | `tests/test_dynarmic.py` runs synthetic programs on dynarmic from Python. |
 | 2. Missing instructions | Add `LDAPR`, the pointer authentication forms and the LSE atomics to the fork. A test harness assembles synthetic programs with `aarch64-linux-gnu-as`, runs each on Unicorn and on dynarmic, and compares the registers, the flags and the memory. | Every instruction group in the scan report runs on dynarmic and gives the same results as on Unicorn. |
 | 3. A backend for `siicl boot` | A dynarmic implementation of `siicl.cpu.Cpu`: `run`, `map_host`, `read`, `write`, the registers and the saved contexts. An option of `siicl boot` chooses the backend. Counter reads go through `GetCNTPCT` instead of patched SVCs. | The sample boots on dynarmic to the same point as on Unicorn, the two boot logs agree thread by thread, and the speed is measured. |
 | 4. Parallel cores and real time | One host thread for each guest core, with the shared exclusive monitor, and a scheduler for each core. A real-time mode that uses the host clock, beside the repeatable mode. The language of the kernel and the services is chosen here, from the number of SVCs a frame makes after milestone 1 and the costs measured above. | The sample runs with its threads on several host threads, and two runs in the repeatable mode still give the same boot log. |
 
 The dynarmic fork and the C library become runtime dependencies besides Unicorn. The environment section of `CLAUDE.md` is updated when they are added.
 
+## Stage 1: the C library
+
+Build it with CMake (pacman packages `cmake`, `boost` and `ninja`). dynarmic's other libraries come with its source, in `native/dynarmic/externals`.
+
+```sh
+git submodule update --init native/dynarmic
+cmake -S native -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build/native
+```
+
+`siicl.dynarmic` loads `build/native/libsiicl_dynarmic.so`, or the file that `$SIICL_DYNARMIC` names. Its tests skip when the library isn't built.
+
+- A `Machine` holds the page tables and the exclusive monitor; each `Core` is one CPU. `Core.run()` returns the same `siicl.cpu.Stop` as `Cpu.run()`.
+- Pages that can be both read and written go into dynarmic's page table, so the generated code reaches them directly. Accesses to other pages, such as code and read-only data, and accesses that cross a page boundary go to callbacks that check the permissions.
+- A data fault stops the run at the instruction that made it, with its registers unchanged. Undefined instructions and `BRK` leave the PC at the instruction, as `siicl.cpu` does.
+- dynarmic raises an exception for `YIELD`, `WFE`, `WFI`, `SEV` and `SEVL`. The C library treats them as NOPs, as Unicorn does.
+- Each read of `CNTPCT_EL0` returns the core's counter and adds 1 to it. `CNTFRQ_EL0` reads 19.2 MHz.
+
+What stage 1 found:
+
+- **A run ends only at the end of a block of translated code.** With a budget of 100 on a loop of three instructions, runs used 100 and 102 instructions; with budgets of 7 and 1, they used 9 and 3. Sixty instructions without a branch ran to their end on a budget of 10. Two runs of the same program give the same counts, so the repeatable mode still works, but a slice can end at a different instruction than on Unicorn.
+- **A core counts instructions or accepts halt requests, not both.** Between linked blocks, dynarmic checks either the budget or a halt request. A core created with `count_ticks` (the repeatable mode) stops only at its budget; a core created without it (real-time play) runs until another thread calls `Core.halt()`.
+- **Counts at exceptions and faults are approximate.** A run that ends at an exception is charged its whole block, and a run that ends at a data fault is charged nothing.
+- **Exclusive stores work across cores.** Two cores on two host threads each added 1 to the same word 200,000 times with `LDXR` and `STXR`, and the word ended at 400,000.
+- **Read-only pages cost a call per access.** Leaving them out of dynarmic's page table keeps the permissions correct, but every access to code and read-only data goes through a callback. Stage 3 measures what this costs on a boot. dynarmic's `fastmem_pointer`, with read-only pages protected in host memory, is the faster alternative.
+
 ## Open questions
 
-- Whether dynarmic ends a slice at an exact instruction count, or only between blocks of generated code. If only between blocks, threads switch at different instructions on the two backends, and boot logs can only be compared thread by thread.
+- Whether stage 2 should give dynarmic a way to end a slice at an exact instruction count, such as a limit on block length, so that boot logs from the two backends can be compared line by line.
 - Whether LSE atomics are a callback or IR operations. Stage 2 can start with the callback and measure the boot before deciding.
 - What `PACGA` returns. With the keys off its result only has to be the same for the same inputs. Matching Unicorn's value keeps the comparison in stage 2 exact; otherwise the harness leaves `PACGA` out.
 - Where the fork lives, and how its changes are kept as a short series of commits that can be moved onto another maintained fork.

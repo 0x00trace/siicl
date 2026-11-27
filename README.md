@@ -34,6 +34,7 @@ Reports go to `~/.cache/siicl/<title id>/` as `report.md` and `report.json`.
 - Optional: `cuda`, for `nvdisasm` (`siicl vzip disasm`, `siicl vzip shaders --nvdisasm`)
 - Optional: a Vulkan driver and `vulkan-icd-loader`, for `siicl vzip check-gpu`; `spirv-tools`, for the tests that validate SPIR-V
 - One package from PyPI at runtime, which `uv` installs: `unicorn`, the CPU emulator that runs the game's code
+- Optional: `cmake`, `boost` and `ninja`, to build the dynarmic backend in `native/` ([docs/cpu-backend.md](docs/cpu-backend.md))
 
 ## Usage
 
@@ -45,6 +46,14 @@ uv run siicl boot  ~/Games/game_dumps/switch_2/game.nup
 uv run siicl vzip stats  ~/Games/game_dumps/switch_2/game.nup
 uv run siicl vzip paths  ~/Games/game_dumps/switch_2/game.nup
 uv run siicl vzip extract ~/Games/game_dumps/switch_2/game.nup --out ~/siicl-out --path data/dir/file.png.import
+```
+
+To build the dynarmic backend, which `siicl boot` doesn't use yet:
+
+```sh
+git submodule update --init native/dynarmic
+cmake -S native -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build/native
 ```
 
 ## No game content in this repository
