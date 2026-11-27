@@ -65,6 +65,7 @@ git config core.hooksPath .githooks
 - [docs/translation.md](docs/translation.md): the translation of compute programs to SPIR-V
 - [docs/gpu-check.md](docs/gpu-check.md): how translations are checked on a GPU, and the results on the sample
 - [docs/boot.md](docs/boot.md): how `siicl boot` loads a game and starts it, and what the boot log shows
+- [docs/cpu-backend.md](docs/cpu-backend.md): measurements of the Unicorn backend, and the plan for a CPU backend for real-time play
 
 ## License
 

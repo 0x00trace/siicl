@@ -27,7 +27,7 @@ The image must come from the game's own GPU commands. If the first image the gam
 - **CPU.** The game's code runs in Unicorn, the CPU emulator built on QEMU (Python package `unicorn`), with its `max` CPU model. A test on synthetic code ran every architecture feature in the scan report: LSE atomics, LDAPR, pointer authentication, dot product, half precision, CRC32 and AES. Unicorn is the first runtime dependency outside the standard library.
 - **Threads.** Guest threads run one at a time on one host thread. siicl switches threads at SVCs and after a fixed number of instructions. Runs are then repeatable, so boot logs from two runs can be compared.
 - **Kernel and services.** siicl implements the kernel and the system services itself, in Python. It runs only the game's code, never the system's own modules.
-- **Speed.** Not a goal for this milestone. Code that proves too slow can move to a compiled language afterwards, chosen by measuring real boots.
+- **Speed.** Not a goal for this milestone. Code that proves too slow can move to a compiled language afterwards, chosen by measuring real boots. [cpu-backend.md](cpu-backend.md) measures the Unicorn backend and plans the backend for real-time play.
 - **Tests.** As elsewhere in the repository, tests build their own synthetic inputs: NSO files, AArch64 programs assembled with `aarch64-linux-gnu-as`, IPC messages and GPU command buffers.
 
 ### Stages
