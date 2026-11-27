@@ -53,7 +53,14 @@ def staged_paths():
         ["git", "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR"],
         check=True, capture_output=True,
     ).stdout
-    return [p.decode() for p in out.split(b"\0") if p]
+    linked = submodules()
+    return [p.decode() for p in out.split(b"\0") if p and p.decode() not in linked]
+
+
+def submodules():
+    """Paths staged as submodules. Each is a commit of another repository (mode 160000), not a file."""
+    out = subprocess.run(["git", "ls-files", "-s", "-z"], check=True, capture_output=True).stdout
+    return {e.split(b"\t", 1)[1].decode() for e in out.split(b"\0") if e.startswith(b"160000 ")}
 
 
 def staged_blob(path):
