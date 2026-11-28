@@ -1,6 +1,6 @@
 # CPU backend for real-time play
 
-siicl runs a game's AArch64 code in Unicorn ([boot.md](boot.md)). Unicorn suits milestone 1 of the [roadmap](roadmap.md): it runs every instruction the scanner finds in game code, and two runs of the same game do the same thing. It can't give the frame rate and frame pacing a game needs when someone plays it. This document records the measurements that show this, compares the backends that could replace Unicorn, and plans the change. Stage 1 of the plan is done ([Stage 1: the C library](#stage-1-the-c-library)); `siicl boot` still runs on Unicorn.
+siicl runs a game's AArch64 code in Unicorn ([boot.md](boot.md)). Unicorn suits milestone 1 of the [roadmap](roadmap.md): it runs every instruction the scanner finds in game code, and two runs of the same game do the same thing. It can't give the frame rate and frame pacing a game needs when someone plays it. This document records the measurements that show this, compares the backends that could replace Unicorn, and plans the change. Stages 1 and 2 of the plan are done ([Stage 1: the C library](#stage-1-the-c-library), [Stage 2: the missing instructions](#stage-2-the-missing-instructions)); `siicl boot` still runs on Unicorn.
 
 ## Measurements of the Unicorn backend
 
@@ -39,7 +39,7 @@ dynarmic is a JIT compiler from ARM to x86-64 and AArch64 code, written in C++ a
 - `GetCNTPCT` answers reads of the system counter, so the loader would no longer need to change counter reads into SVCs. `wall_clock_cntpct` makes the counter follow the host clock.
 - `CallSVC` and `ExceptionRaised` return SVCs, undefined instructions and other exceptions to the host.
 
-It doesn't implement all of the game's instructions. Version 6.7.0 (2024-03-02) is the last release, and the version Arch Linux's AUR package builds. In its A64 decoder (`src/dynarmic/frontend/A64/decoder/a64.inc`), these entries are commented out:
+As released, it doesn't implement all of the game's instructions; siicl's fork adds most of them ([Stage 2](#stage-2-the-missing-instructions)). Version 6.7.0 (2024-03-02) is the last release, and the version Arch Linux's AUR package builds. In its A64 decoder (`src/dynarmic/frontend/A64/decoder/a64.inc`), these entries are commented out:
 
 - LSE atomics: `CAS`, `CASP`, `LDADD`, `LDCLR`, `LDEOR`, `LDSET` and `SWP`, in all sizes and orderings
 - `LDAPR`, `LDAPRB` and `LDAPRH`
@@ -54,9 +54,9 @@ Running one instruction of each group through the C library of stage 1 (`tests/t
 - `CNTVCT_EL0`, the virtual counter. dynarmic has only `CNTPCT_EL0`, which is the counter the sample reads.
 - The performance monitor registers, such as `PMCR_EL0` and `PMCNTENSET_EL0`, which the sample's code also accesses.
 
-The original repository, `github.com/merryhime/dynarmic`, no longer exists. The AUR package builds from `github.com/lioncash/dynarmic`, and several emulator projects keep their own forks. siicl would keep its own fork as well.
+The original repository, `github.com/merryhime/dynarmic`, no longer exists. The AUR package builds from `github.com/lioncash/dynarmic`, and several emulator projects keep their own forks. siicl keeps its own fork as well, at `github.com/0x00trace/dynarmic`.
 
-The work:
+The work, as planned before stage 2:
 
 - `LDAPR` as `LDAR`, which is implemented. Its ordering is stronger, so the result is correct.
 - The pointer authentication forms with the treatment siicl uses now: PAC instructions leave pointers unchanged, AUT instructions succeed, `RETAB` returns as `RET` does, `BRAA` branches as `BR` does, and `LDRAA` loads as `LDR` does with its scaled offset.
@@ -103,7 +103,7 @@ Stages 1 to 3 keep Unicorn as the default backend and leave the kernel as it is,
 | Stage | Work | Done when |
 |---|---|---|
 | 1. Build and C library | Done. dynarmic 6.7.0 is the git submodule `native/dynarmic`, unchanged, from `github.com/lioncash/dynarmic`; the fork is made in stage 2, with the first change to dynarmic. `native/siicl_dynarmic.cpp` is the C library: create a machine and its cores, map pages, read and write registers, run for a number of ticks, and report why a run stopped. `siicl.dynarmic` loads it with `ctypes`, as siicl loads liblz4 and libvulkan. | `tests/test_dynarmic.py` runs synthetic programs on dynarmic from Python. |
-| 2. Missing instructions | Add `LDAPR`, the pointer authentication forms and the LSE atomics to the fork. A test harness assembles synthetic programs with `aarch64-linux-gnu-as`, runs each on Unicorn and on dynarmic, and compares the registers, the flags and the memory. | Every instruction group in the scan report runs on dynarmic and gives the same results as on Unicorn. |
+| 2. Missing instructions | Done. The fork, `github.com/0x00trace/dynarmic` (branch `siicl`), adds `LDAPR`, the pointer authentication forms, the LSE atomics and `CNTVCT_EL0`, and the submodule points at it. `tests/test_cpu_compare.py` assembles synthetic programs with `aarch64-linux-gnu-as`, runs each on Unicorn and on dynarmic, and compares the registers, the flags and the memory. | The instruction groups of the scan report run on dynarmic and give the same results as on Unicorn, except where Unicorn is wrong (see below). Three groups that no boot has needed yet are still missing. |
 | 3. A backend for `siicl boot` | A dynarmic implementation of `siicl.cpu.Cpu`: `run`, `map_host`, `read`, `write`, the registers and the saved contexts. An option of `siicl boot` chooses the backend. Counter reads go through `GetCNTPCT` instead of patched SVCs. | The sample boots on dynarmic to the same point as on Unicorn, the two boot logs agree thread by thread, and the speed is measured. |
 | 4. Parallel cores and real time | One host thread for each guest core, with the shared exclusive monitor, and a scheduler for each core. A real-time mode that uses the host clock, beside the repeatable mode. The language of the kernel and the services is chosen here, from the number of SVCs a frame makes after milestone 1 and the costs measured above. | The sample runs with its threads on several host threads, and two runs in the repeatable mode still give the same boot log. |
 
@@ -135,9 +135,34 @@ What stage 1 found:
 - **Exclusive stores work across cores.** Two cores on two host threads each added 1 to the same word 200,000 times with `LDXR` and `STXR`, and the word ended at 400,000.
 - **Read-only pages cost a call per access.** Leaving them out of dynarmic's page table keeps the permissions correct, but every access to code and read-only data goes through a callback. Stage 3 measures what this costs on a boot. dynarmic's `fastmem_pointer`, with read-only pages protected in host memory, is the faster alternative.
 
+## Stage 2: the missing instructions
+
+The fork is `github.com/0x00trace/dynarmic`. Its branch `siicl` is dynarmic 6.7.0 with four commits, one for each group below, so the changes can be moved onto another fork of dynarmic. All four change only the A64 frontend, so they work on both of dynarmic's backends.
+
+- **`LDAPR`, `LDAPRB`, `LDAPRH`** are translated as `LDAR`.
+- **Pointer authentication** runs as on a CPU with the keys disabled, which is what siicl does on Unicorn: the PAC and AUT instructions and `XPACI` and `XPACD` leave the pointer unchanged, `RETAA` and `RETAB` return as `RET` does, `BRAA` and `BLRAA` and their other forms branch as `BR` and `BLR` do, and `LDRAA` and `LDRAB` load as `LDR` does.
+- **`PACGA`** returns a 32-bit code computed from its two inputs by multiplying and shifting, not with the architecture's QARMA cipher. A program can't read the key and can only compare one code with another, so any function of the two inputs serves. Its value differs from Unicorn's, and the comparison leaves it out.
+- **The LSE atomics** (`CAS`, `CASP`, `LDADD`, `LDCLR`, `LDEOR`, `LDSET`, `LDSMAX`, `LDSMIN`, `LDUMAX`, `LDUMIN`, `SWP`, in all sizes) are each translated as an exclusive load, the operation, and an exclusive store. The store succeeds only if memory still holds the loaded value; if it fails, the instruction runs again. This uses the exclusive monitor that the cores share, so the atomics are atomic across cores, and it needed no change to the backends. Each atomic takes the monitor's lock twice. `LOCK`-prefixed host instructions would be faster; stage 3 measures whether that matters on a boot.
+- **`CNTVCT_EL0`** reads the same value as `CNTPCT_EL0`.
+
+Still missing, because no boot has needed them and the right behaviour isn't settled:
+
+- Half-precision arithmetic other than `FNEG`.
+- The performance monitor registers. A program at EL0 can access them only if the kernel allows it, and whether the console's kernel does isn't known.
+- `STG` and the other memory tagging instructions.
+
+`tests/test_dynarmic.py` checks that each of these still stops as an undefined instruction.
+
+What the tests show:
+
+- **Agreement with Unicorn.** `tests/test_cpu_compare.py` runs programs for the atomics, compare and swap, `LDAPR`, pointer authentication, the authenticated branches and loads, exclusive accesses, dot product, half-precision negate, CRC32, AES, SHA and polynomial multiply. Each starts from four sets of random registers, flags and memory, and both backends end with the same general registers, vector registers, flags and memory.
+- **Atomics across cores.** Two cores on two host threads each ran 200,000 increments of one word, with `LDADDAL`, with a `CASAL` loop, and with a plain increment under a lock taken with `SWPAL`. In each case the word ended at 400,000.
+- **Faults.** An atomic instruction on unmapped or read-only memory stops the run at the instruction with its registers unchanged, and doesn't run again.
+- **Unicorn computes `LDSMAX` and `LDSMIN` wrongly at 8, 16 and 32 bits.** Unicorn 2.1.4 compares their operand as an unsigned number, so the result is wrong whenever the operand is negative at the size of the access: with 0 in memory and an operand of -1, `LDSMAX` stores -1. The 64-bit forms and the unsigned forms are right. dynarmic gives the architecture's result in every case that `test_atomic_min_and_max_follow_the_architecture` checks, so for these forms the tests compare dynarmic with the architecture's definition and not with Unicorn. The sample's code contains the 32-bit forms, so a boot on Unicorn can compute a wrong value there ([boot.md](boot.md)). `test_unicorn_signed_atomic_min_and_max` is expected to fail, and passes once a Unicorn release fixes this.
+
 ## Open questions
 
-- Whether stage 2 should give dynarmic a way to end a slice at an exact instruction count, such as a limit on block length, so that boot logs from the two backends can be compared line by line.
-- Whether LSE atomics are a callback or IR operations. Stage 2 can start with the callback and measure the boot before deciding.
-- What `PACGA` returns. With the keys off its result only has to be the same for the same inputs. Matching Unicorn's value keeps the comparison in stage 2 exact; otherwise the harness leaves `PACGA` out.
-- Where the fork lives, and how its changes are kept as a short series of commits that can be moved onto another maintained fork.
+- Whether the fork should give dynarmic a way to end a slice at an exact instruction count, such as a limit on block length, so that boot logs from the two backends can be compared line by line.
+- Whether the atomics should use `LOCK`-prefixed host instructions instead of the exclusive monitor. Stage 3 measures the boot before deciding.
+- What a game sees when it accesses the performance monitor registers on the console.
+- What to do about Unicorn's `LDSMAX` and `LDSMIN` while `siicl boot` still runs on Unicorn: the loader could change them into SVCs that siicl computes, as it does for counter reads.

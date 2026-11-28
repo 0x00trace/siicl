@@ -161,7 +161,7 @@ def test_exclusive_increments_on_two_cores_in_parallel_lose_no_updates(machine, 
 
 
 def test_counter_reads_return_the_counter_and_advance_it(machine, tmp_path):
-    c = load(machine, tmp_path, "mrs x0, cntpct_el0\nmrs x1, cntpct_el0\nmrs x2, cntfrq_el0\nsvc #0")
+    c = load(machine, tmp_path, "mrs x0, cntpct_el0\nmrs x1, cntvct_el0\nmrs x2, cntfrq_el0\nsvc #0")
     c.counter = 1000
     assert c.run().reason == "svc"
     assert (c.x(0), c.x(1), c.x(2), c.counter) == (1000, 1001, 19_200_000, 1002)
@@ -204,25 +204,117 @@ def test_runs_the_architecture_features_it_decodes(machine, tmp_path):
 @pytest.mark.parametrize(
     "instruction",
     [
-        "ldaddal x2, x3, [x1]",  # FEAT_LSE
-        "casal x4, x5, [x1]",
-        "swpal x4, x5, [x1]",
-        "ldapr x6, [x1]",  # FEAT_LRCPC
-        "pacia x0, x1",  # FEAT_PAuth, the forms that are not hints
-        "autib x0, x1",
-        "retab",
-        "braa x0, x1",
-        "ldraa x0, [x1]",
-        "fadd h4, h3, h3",  # FEAT_FP16 arithmetic
-        "mrs x0, cntvct_el0",  # the virtual counter; dynarmic has only CNTPCT_EL0
+        "fadd h4, h3, h3",  # FEAT_FP16 arithmetic; games use only FNEG of it
+        "fmul v0.8h, v1.8h, v2.8h",
         "mrs x0, pmcr_el0",  # performance monitor registers
         "msr pmcntenset_el0, x0",
+        "stg x1, [x1]",  # FEAT_MTE
     ],
 )
-def test_instructions_dynarmic_does_not_decode_yet(machine, tmp_path, instruction):
-    """Stage 2 of docs/cpu-backend.md adds these; this test records which ones are missing."""
+def test_instructions_dynarmic_does_not_run(machine, tmp_path, instruction):
+    """docs/cpu-backend.md lists these; this test records which ones are missing."""
     c = load(machine, tmp_path, f"mov x1, #{DATA:#x}\n{instruction}\nsvc #0")
     assert (c.run().reason, c.pc) == ("undefined", CODE + 4)
+
+
+def test_generic_authentication_codes_depend_on_both_inputs(machine, tmp_path):
+    source = "pacga x3, x0, x1\npacga x4, x0, x1\npacga x5, x0, x2\npacga x6, x2, x1\npacga x7, x0, sp\nsvc #0"
+    c = load(machine, tmp_path, source)
+    for i, value in enumerate([0x1111_2222_3333_4444, 0x5555_6666_7777_8888, 0x5555_6666_7777_8889]):
+        c.set_x(i, value)
+    assert c.run().reason == "svc"
+    codes = [c.x(i) for i in range(3, 8)]
+    assert codes[0] == codes[1] and len(set(codes[1:])) == 4
+    assert all(code & 0xFFFF_FFFF == 0 and code >> 32 for code in codes)
+
+
+def _run_on_two_cores(machine, tmp_path, source, n):
+    first = load(machine, tmp_path, source)
+    second = machine.core()
+    stops = {}
+    threads = []
+    for c in (first, second):
+        c.pc = CODE
+        c.set_x(1, DATA)
+        c.set_x(3, n)
+        threads.append(threading.Thread(target=lambda c=c: stops.setdefault(c.processor_id, c.run())))
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert [s.reason for s in stops.values()] == ["svc", "svc"]
+
+
+ATOMIC_COUNTERS = {
+    "ldaddal": """
+        mov x2, #1
+    1:  ldaddal x2, x4, [x1]
+        subs x3, x3, #1
+        b.ne 1b
+        svc #0
+    """,
+    "casal": """
+    1:  ldr x4, [x1]
+    2:  mov x5, x4
+        add x6, x4, #1
+        casal x4, x6, [x1]         // x4 becomes the value that was in memory
+        cmp x4, x5
+        b.ne 2b
+        subs x3, x3, #1
+        b.ne 1b
+        svc #0
+    """,
+    "swpal lock": """
+        mov w2, #1
+    1:  mov w4, w2
+        swpal w4, w4, [x1, #0]     // take the lock at [x1]: the old value is 0 when it was free
+        cbnz w4, 1b
+        ldr x5, [x1, #8]           // the counter, protected by the lock
+        add x5, x5, #1
+        str x5, [x1, #8]
+        stlr wzr, [x1]
+        subs x3, x3, #1
+        b.ne 1b
+        svc #0
+    """,
+}
+
+
+@pytest.mark.parametrize("name", ATOMIC_COUNTERS)
+def test_atomic_instructions_on_two_cores_in_parallel_lose_no_updates(machine, tmp_path, name):
+    n = 200_000
+    _run_on_two_cores(machine, tmp_path, ATOMIC_COUNTERS[name], n)
+    assert machine.read_u64(DATA + (8 if "lock" in name else 0)) == 2 * n
+
+
+@pytest.mark.parametrize(
+    ("instruction", "address", "perm", "access", "kind"),
+    [
+        ("ldaddal x2, x4, [x1]", 0x50000, None, "read", "unmapped"),
+        ("casal x2, x4, [x1]", 0x50000, None, "read", "unmapped"),
+        ("swpal w2, w4, [x1]", DATA, cpu.READ, "write", "protected"),
+        ("casal x2, x4, [x1]", DATA, cpu.READ, "write", "protected"),
+        ("casp x2, x3, x4, x5, [x1]", DATA, cpu.READ, "write", "protected"),
+    ],
+)
+def test_a_fault_in_an_atomic_instruction_stops_the_run(machine, tmp_path, instruction, address, perm, access, kind):
+    c = load(machine, tmp_path, f"nop\n{instruction}\nsvc #0")
+    if perm is not None:
+        machine.protect(DATA, 0x1000, perm)
+    before = [0x11, address, 0x22, 0x33, 0x44, 0x55]
+    for i, value in enumerate(before):
+        c.set_x(i, value)
+    stop = c.run(limit=1000)
+    assert (stop.reason, stop.access, stop.kind, stop.address, stop.pc) == ("fault", access, kind, address, CODE + 4)
+    assert [c.x(i) for i in range(6)] == before
+
+
+def test_an_instruction_budget_ends_a_loop_of_atomic_instructions(machine, tmp_path):
+    c = load(machine, tmp_path, f"mov x1, #{DATA:#x}\nmov x2, #1\n1: ldadd x2, x4, [x1]\ncmp x4, #999\nb.ne 1b\nsvc #1")
+    stops = 0
+    while (stop := c.run(limit=50)).reason == "limit":
+        stops += 1
+    assert (stop.reason, machine.read_u64(DATA)) == ("svc", 1000) and stops > 10
 
 
 def test_reads_and_writes_guest_memory_and_registers(machine, tmp_path):
