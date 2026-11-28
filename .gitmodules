@@ -1,3 +1,4 @@
 [submodule "native/dynarmic"]
 	path = native/dynarmic
-	url = https://github.com/lioncash/dynarmic
+	url = https://github.com/0x00trace/dynarmic
+	branch = siicl

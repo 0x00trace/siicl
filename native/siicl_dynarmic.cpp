@@ -321,7 +321,7 @@ void sd_machine::invalidate(uint64_t address, uint64_t size) {
 extern "C" {
 
 const char* sd_version(void) {
-    return "siicl-dynarmic 1, dynarmic 6.7.0";
+    return "siicl-dynarmic 1, dynarmic 6.7.0 with siicl's changes";
 }
 
 sd_machine* sd_machine_create(uint32_t address_bits, uint32_t cores) {

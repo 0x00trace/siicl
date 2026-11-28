@@ -13,6 +13,8 @@ The game's code runs in Unicorn, the CPU emulator built on QEMU (`siicl.cpu`), w
 
 Unicorn runs the code at EL1 with the pointer authentication keys off. PAC instructions then leave pointers unchanged, AUT instructions always succeed and RETAB returns like RET. That is the treatment the scan report asks for.
 
+One known error: Unicorn 2.1.4 computes `LDSMAX` and `LDSMIN` wrongly at 8, 16 and 32 bits when their operand is negative at that size, because it compares the operand as an unsigned number. The sample's code contains the 32-bit forms. [cpu-backend.md](cpu-backend.md) has the measurement.
+
 `Cpu.run()` runs until one of these stops it:
 
 | Stop | Meaning |
