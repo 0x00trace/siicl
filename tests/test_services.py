@@ -251,6 +251,20 @@ def test_hid_hands_out_shared_memory_that_takes_the_size_the_game_maps(tmp_path)
     assert shared.size == 0x40000 and len(shared.view) == 0x40000
 
 
+def test_hid_accepts_the_setup_of_the_mouse_the_touch_screen_and_a_work_memory():
+    from siicl.services import hid
+
+    p = process()
+    session = services.Session(hid.Hid(p))
+    text, msg = send(p, session, cmif(3150, struct.pack("<IIQ", 1, 0, 0x51), pid=0))
+    assert (response(msg)[0], text) == (0, "hid command 3150 (mouse)(0x1)")
+    text, msg = send(p, session, cmif(1004, struct.pack("<IIQ", 1920, 1080, 0x51), pid=0))
+    assert (response(msg)[0], text) == (0, "hid SetTouchScreenResolution(0x780, 0x438)")
+    memory = p.handles.add(kernel.TransferMemory(0x4800_0000, 0x4000, 0))
+    text, msg = send(p, session, cmif(3110, struct.pack("<QQ", 0x51, 0x4000), pid=0, copy_handles=[memory]))
+    assert (response(msg)[0], text) == (0, "hid command 3110 (work memory)(transfer memory of 0x4000 bytes)")
+
+
 def test_the_application_gets_an_operation_mode_event_and_a_graphics_scale():
     p = process()
     functions = services.Session(applet.ApplicationFunctions(p))
