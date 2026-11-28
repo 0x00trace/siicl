@@ -219,14 +219,22 @@ class HandleTable:
 
 
 class Process:
-    def __init__(self, modules: dict[str, bytes], npdm: Npdm | None = None, *, layout: Layout = LAYOUT_39BIT):
+    def __init__(
+        self,
+        modules: dict[str, bytes],
+        npdm: Npdm | None = None,
+        *,
+        layout: Layout = LAYOUT_39BIT,
+        cpu: Cpu | None = None,
+    ):
+        """cpu is the CPU backend: a siicl.cpu.Cpu (the default) or a siicl.dynarmic.Cpu."""
         if npdm is not None and npdm.address_space_type != ADDRESS_SPACE_39BIT:
             raise ProcessError(
                 f"siicl runs only 64-bit processes with a 39-bit address space, not {npdm.address_space}"
             )
         self.npdm = npdm
         caps = npdm.caps if npdm else None
-        self.cpu = Cpu()
+        self.cpu = cpu if cpu is not None else Cpu()
         self._blank = self.cpu.save_context()
         self.space = AddressSpace(self.cpu, layout)
         self.modules = loader.load(self.space, modules)
@@ -276,6 +284,8 @@ class Process:
     # Setup
 
     def _patch_counter_reads(self) -> int:
+        if self.cpu.native_counter:
+            return 0
         count = 0
         for m in self.modules:
             text = self.cpu.read(m.text.start, m.text.size)
@@ -449,7 +459,13 @@ class Process:
                 self._time_out()
                 continue
             self.switch_to(thread)
-            stop = self.cpu.run(limit=SLICE)
+            if self.cpu.native_counter:
+                # The CPU answers counter reads from its own counter, which advances with each read.
+                self.cpu.counter = self.ticks
+                stop = self.cpu.run(limit=SLICE)
+                self.ticks = self.cpu.counter
+            else:
+                stop = self.cpu.run(limit=SLICE)
             thread.pc = self.cpu.pc
             if stop.reason == "limit":
                 self.ticks += ns_to_ticks(SLICE)

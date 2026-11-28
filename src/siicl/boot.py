@@ -37,7 +37,11 @@ def write_setup(process: Process, log: TextIO) -> None:
         f"stack top {t.stack_top:#x}, thread-local storage {t.tls:#x}, priority {t.priority}, core {t.core}",
         file=log,
     )
-    print(f"system counter reads turned into SVCs: {process.counter_reads}", file=log)
+    print(f"CPU backend: {process.cpu.name}", file=log)
+    if process.cpu.native_counter:
+        print("system counter reads: answered by the CPU backend", file=log)
+    else:
+        print(f"system counter reads turned into SVCs: {process.counter_reads}", file=log)
 
 
 def describe_stop(process: Process, stop: Stop) -> str:

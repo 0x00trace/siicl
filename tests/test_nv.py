@@ -9,6 +9,8 @@ from siicl.kernel import Unimplemented
 from siicl.services import gfx, nv
 from tests.test_services import process, response, send, tipc
 
+pytestmark = pytest.mark.usefixtures("cpu_backend")  # each test runs on Unicorn and on dynarmic
+
 
 def ioctl3(fd, request, data=b"", out_sizes=(0x100, 0x100)):
     """An Ioctl3 request: the argument in a send static, the two outputs in receive statics."""

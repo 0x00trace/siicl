@@ -11,6 +11,8 @@ from siicl.services import applet, lm, time
 from siicl.services.sm import ServiceManager
 from tests.builders import build_npdm, build_nso
 
+pytestmark = pytest.mark.usefixtures("cpu_backend")  # each test runs on Unicorn and on dynarmic
+
 POINTER = 0x8000
 
 

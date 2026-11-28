@@ -4,12 +4,15 @@ import io
 
 import pytest
 
-from siicl import addrspace, boot, cli, kernel
+from siicl import addrspace, boot, cli, dynarmic, kernel
 from siicl import npdm as npdm_mod
 from siicl.addrspace import MemoryState
 from tests.builders import AS, assemble, build_npdm, build_nso, build_nup
 
-pytestmark = pytest.mark.skipif(not AS, reason="aarch64-linux-gnu-binutils is not installed")
+pytestmark = [
+    pytest.mark.skipif(not AS, reason="aarch64-linux-gnu-binutils is not installed"),
+    pytest.mark.usefixtures("cpu_backend"),  # each test runs on Unicorn and on dynarmic
+]
 
 BASE = addrspace.LAYOUT_39BIT.code.start
 LAYOUT = addrspace.LAYOUT_39BIT
@@ -116,7 +119,7 @@ def test_boot_log_lists_each_svc_and_the_one_that_is_missing(tmp_path):
     assert "        1 SetHeapSize" in text
 
 
-def test_boot_command_writes_the_log_outside_the_repo(tmp_path, capsys):
+def _game(tmp_path):
     container = build_nup(
         [
             ("exefs/rtld", build_nso(assemble(CONNECT, tmp_path), bss=0), True),
@@ -126,10 +129,32 @@ def test_boot_command_writes_the_log_outside_the_repo(tmp_path, capsys):
     )
     src = tmp_path / "game.nup"
     src.write_bytes(container)
-    out = tmp_path / "out"
+    return src
+
+
+def test_boot_command_writes_the_log_outside_the_repo(tmp_path, capsys):
+    src, out = _game(tmp_path), tmp_path / "out"
     assert cli.main(["boot", str(src), "--out", str(out)]) == 0
     expected = 'SVC 0x1F (ConnectToNamedPort) to port "dbg:" is not implemented, at rtld+0x4 (0x8000004), in thread 0'
     assert expected in capsys.readouterr().out
     text = (out / "boot.log").read_text()
     assert text.startswith("siicl boot log for game.nup, title 0400000000001000")
     assert expected in text
+
+
+def test_boot_command_runs_on_the_cpu_backend_it_is_given(tmp_path, cpu_backend):
+    src, out = _game(tmp_path), tmp_path / "out"
+    assert cli.main(["boot", str(src), "--out", str(out), "--cpu", cpu_backend]) == 0
+    text = (out / "boot.log").read_text()
+    assert f"CPU backend: {cpu_backend}" in text
+    if cpu_backend == "dynarmic":
+        assert "system counter reads: answered by the CPU backend" in text
+    else:
+        assert "system counter reads turned into SVCs: 0" in text
+
+
+def test_boot_command_says_when_the_dynarmic_library_is_missing(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("SIICL_DYNARMIC", str(tmp_path / "missing.so"))
+    monkeypatch.setattr(dynarmic, "_lib", None)
+    assert cli.main(["boot", str(_game(tmp_path)), "--out", str(tmp_path / "out"), "--cpu", "dynarmic"]) == 2
+    assert "missing.so" in capsys.readouterr().err

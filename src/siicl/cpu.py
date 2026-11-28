@@ -84,7 +84,15 @@ class Stop:
 
 
 class Cpu:
-    """One AArch64 CPU and the guest memory it sees."""
+    """One AArch64 CPU and the guest memory it sees.
+
+    `siicl.dynarmic.Cpu` has the same interface on another emulator. `native_counter` says
+    whether the CPU answers reads of the system counter itself. Unicorn does not, so the kernel
+    turns each read into an SVC.
+    """
+
+    name = "unicorn"
+    native_counter = False
 
     def __init__(self) -> None:
         self.uc = unicorn.Uc(unicorn.UC_ARCH_ARM64, unicorn.UC_MODE_ARM)

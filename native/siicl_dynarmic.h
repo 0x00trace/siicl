@@ -73,8 +73,9 @@ SD_API int sd_map(sd_machine* m, uint64_t address, uint64_t size, uint32_t perm,
 SD_API int sd_protect(sd_machine* m, uint64_t address, uint64_t size, uint32_t perm);
 SD_API int sd_unmap(sd_machine* m, uint64_t address, uint64_t size);
 
-/* Read and write guest memory whatever its permissions. A write makes every core translate
- * the code in the range again. Each returns 0, or -1 if part of the range is unmapped. */
+/* Read and write guest memory whatever its permissions. A write to a page that can be executed
+ * makes every core translate the code in the range again. Each returns 0, or -1 if part of the
+ * range is unmapped. */
 SD_API int sd_read(sd_machine* m, uint64_t address, void* out, uint64_t size);
 SD_API int sd_write(sd_machine* m, uint64_t address, const void* data, uint64_t size);
 

@@ -150,7 +150,16 @@ def cmd_boot(args: argparse.Namespace) -> int:
     label = f"{title_id:016X}" if title_id is not None else source.stem
     out_dir = paths.ensure_outside_repo(Path(args.out) if args.out else paths.cache_dir() / label)
     out_dir.mkdir(parents=True, exist_ok=True)
-    process = kernel.Process(mods, npdm.parse(npdm_raw) if npdm_raw else None)
+    backend = None
+    if args.cpu == "dynarmic":
+        from siicl import dynarmic
+
+        try:
+            backend = dynarmic.Cpu()
+        except dynarmic.DynarmicError as err:
+            print(f"siicl: {err}", file=sys.stderr)
+            return 2
+    process = kernel.Process(mods, npdm.parse(npdm_raw) if npdm_raw else None, cpu=backend)
     process.stub_unknown = args.stub_unknown
     log_path = out_dir / "boot.log"
     reader = nup.NupReader(source) if not source.is_dir() else None
@@ -619,6 +628,12 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--out", help="output folder for boot.log (default ~/.cache/siicl/<title id>)")
     bt.add_argument(
         "--seconds", type=float, default=60.0, help="stop after this much guest time, in seconds (default 60)"
+    )
+    bt.add_argument(
+        "--cpu",
+        choices=["unicorn", "dynarmic"],
+        default="unicorn",
+        help="the CPU emulator that runs the game's code (default unicorn; dynarmic needs the library in native/)",
     )
     bt.add_argument(
         "--stub-unknown",

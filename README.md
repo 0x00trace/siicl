@@ -48,7 +48,7 @@ uv run siicl vzip paths  ~/Games/game_dumps/switch_2/game.nup
 uv run siicl vzip extract ~/Games/game_dumps/switch_2/game.nup --out ~/siicl-out --path data/dir/file.png.import
 ```
 
-To build the dynarmic backend, which `siicl boot` doesn't use yet:
+To build the dynarmic backend, which `siicl boot --cpu dynarmic` runs the game on:
 
 ```sh
 git submodule update --init native/dynarmic

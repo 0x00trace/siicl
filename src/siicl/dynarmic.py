@@ -7,6 +7,9 @@ This is the CPU backend that docs/cpu-backend.md plans; siicl.cpu, on Unicorn, i
     cmake -S native -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release
     cmake --build build/native
 
+`Cpu` has the interface of `siicl.cpu.Cpu`, so the kernel can run a process on either backend
+(`siicl boot --cpu dynarmic`). It is one core of a machine of its own.
+
 A `Machine` holds a guest address space and the exclusive monitor that its cores share. Each
 `Core` is one AArch64 CPU; cores of one machine can run at the same time on different host
 threads, because ctypes releases the GIL while a core runs. `Core.run()` returns the same
@@ -164,6 +167,12 @@ class Machine:
             self._m = None
             self._memory.clear()
 
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:  # the interpreter may be shutting down, with the library already gone
+            pass
+
     def __enter__(self) -> Machine:
         return self
 
@@ -317,3 +326,111 @@ class Core:
     def invalidate(self, address: int, size: int) -> None:
         """Translate the code in the range again on this core."""
         self._lib.sd_invalidate(self._c, address, size)
+
+
+class Cpu:
+    """One dynarmic core and its guest memory, with the interface of `siicl.cpu.Cpu`.
+
+    Two things differ from the Unicorn backend. The CPU answers reads of the system counter
+    itself (`native_counter`): each read returns `counter` and adds 1 to it, so the kernel sets
+    `counter` before a run and reads it back after. And a run with a limit ends at the end of a
+    block of translated code, so it can execute a few instructions more than the limit.
+    """
+
+    name = "dynarmic"
+    native_counter = True
+
+    def __init__(self) -> None:
+        self.machine = Machine(cores=1)
+        self.core = self.machine.core()
+
+    # Memory
+
+    def map(self, address: int, size: int, perm: int) -> None:
+        self.machine.map(address, size, perm)
+
+    def map_host(self, address: int, size: int, perm: int, host_address: int) -> None:
+        self.machine.map_host(address, size, perm, host_address)
+
+    def protect(self, address: int, size: int, perm: int) -> None:
+        self.machine.protect(address, size, perm)
+
+    def unmap(self, address: int, size: int) -> None:
+        self.machine.unmap(address, size)
+
+    def read(self, address: int, size: int) -> bytes:
+        return self.machine.read(address, size)
+
+    def write(self, address: int, data: bytes) -> None:
+        self.machine.write(address, data)
+
+    def read_u32(self, address: int) -> int:
+        return self.machine.read_u32(address)
+
+    def read_u64(self, address: int) -> int:
+        return self.machine.read_u64(address)
+
+    def write_u32(self, address: int, value: int) -> None:
+        self.machine.write(address, (value & 0xFFFF_FFFF).to_bytes(4, "little"))
+
+    def write_u64(self, address: int, value: int) -> None:
+        self.machine.write(address, (value & 0xFFFF_FFFF_FFFF_FFFF).to_bytes(8, "little"))
+
+    # Registers
+
+    def x(self, n: int) -> int:
+        return self.core.x(n)
+
+    def set_x(self, n: int, value: int) -> None:
+        self.core.set_x(n, value)
+
+    @property
+    def pc(self) -> int:
+        return self.core.pc
+
+    @pc.setter
+    def pc(self, value: int) -> None:
+        self.core.pc = value
+
+    @property
+    def sp(self) -> int:
+        return self.core.sp
+
+    @sp.setter
+    def sp(self, value: int) -> None:
+        self.core.sp = value
+
+    @property
+    def tpidrro_el0(self) -> int:
+        return self.core.tpidrro_el0
+
+    @tpidrro_el0.setter
+    def tpidrro_el0(self, value: int) -> None:
+        self.core.tpidrro_el0 = value
+
+    @property
+    def tpidr_el0(self) -> int:
+        return self.core.tpidr_el0
+
+    @tpidr_el0.setter
+    def tpidr_el0(self, value: int) -> None:
+        self.core.tpidr_el0 = value
+
+    @property
+    def counter(self) -> int:
+        return self.core.counter
+
+    @counter.setter
+    def counter(self, value: int) -> None:
+        self.core.counter = value
+
+    def save_context(self) -> object:
+        return self.core.save_context()
+
+    def restore_context(self, context: object) -> None:
+        self.core.restore_context(context)
+
+    # Running
+
+    def run(self, *, limit: int | None = None) -> Stop:
+        return self.core.run(limit=limit)
