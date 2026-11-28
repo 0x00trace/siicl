@@ -1,6 +1,6 @@
 # CPU backend for real-time play
 
-siicl runs a game's AArch64 code in Unicorn ([boot.md](boot.md)). Unicorn suits milestone 1 of the [roadmap](roadmap.md): it runs every instruction the scanner finds in game code, and two runs of the same game do the same thing. It can't give the frame rate and frame pacing a game needs when someone plays it. This document records the measurements that show this, compares the backends that could replace Unicorn, and plans the change. Stages 1 to 3 of the plan are done ([Stage 1: the C library](#stage-1-the-c-library), [Stage 2: the missing instructions](#stage-2-the-missing-instructions), [Stage 3: the backend for `siicl boot`](#stage-3-the-backend-for-siicl-boot)). `siicl boot --cpu dynarmic` runs a game on dynarmic; Unicorn is still the default.
+siicl first ran a game's AArch64 code only in Unicorn ([boot.md](boot.md)). Unicorn suits milestone 1 of the [roadmap](roadmap.md): it runs every instruction the scanner finds in game code, and two runs of the same game do the same thing. It can't give the frame rate and frame pacing a game needs when someone plays it. This document records the measurements that show this, compares the backends that could replace Unicorn, and plans the change. Stages 1 to 3 of the plan are done ([Stage 1: the C library](#stage-1-the-c-library), [Stage 2: the missing instructions](#stage-2-the-missing-instructions), [Stage 3: the backend for `siicl boot`](#stage-3-the-backend-for-siicl-boot)). `siicl boot` now runs a game on dynarmic by default, and on Unicorn when the dynarmic library isn't built or with `--cpu unicorn`.
 
 ## Measurements of the Unicorn backend
 
@@ -183,12 +183,11 @@ dynarmic ran 4.89 billion guest instructions on one host thread. The 0.75 s outs
 - **Read-only pages and atomics.** The rate above includes the callback for every access to code and read-only data, and the exclusive monitor's lock for every atomic. Neither needs to change before stage 4.
 - **Writes by the kernel.** A write to guest memory asks dynarmic to translate code again only if the page can be executed. Other writes can't change translated code, and each such request resets dynarmic's prediction of return addresses.
 
-Unicorn stays the default backend for now: dynarmic needs the library in `native/` to be built, and it stops at the instructions listed above as still missing.
+dynarmic is the default backend of `siicl boot` since these measurements. It is faster, and it computes `LDSMAX` and `LDSMIN` as the architecture defines them. It stops at the instructions listed above as still missing, and the boot log then names the instruction. Unicorn is used when the library in `native/` isn't built, and it remains the reference that `tests/test_cpu_compare.py` checks dynarmic against.
 
 ## Open questions
 
 - Whether the fork should give dynarmic a way to end a slice at an exact instruction count, such as a limit on block length, so that boot logs from the two backends can be compared line by line.
 - Whether the atomics should use `LOCK`-prefixed host instructions instead of the exclusive monitor. One core runs the boot at 1.8 billion instructions per second with the monitor, so this waits for stage 4, where several cores share the monitor's lock.
-- Whether dynarmic should become the default backend of `siicl boot`, with Unicorn as the reference for tests.
 - What a game sees when it accesses the performance monitor registers on the console.
-- What to do about Unicorn's `LDSMAX` and `LDSMIN` while `siicl boot` still runs on Unicorn: the loader could change them into SVCs that siicl computes, as it does for counter reads.
+- What to do about Unicorn's `LDSMAX` and `LDSMIN` for boots that fall back to Unicorn: the loader could change them into SVCs that siicl computes, as it does for counter reads.

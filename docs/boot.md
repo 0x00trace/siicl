@@ -5,16 +5,19 @@
 Options:
 
 - `--seconds`: how much guest time the run may use (60 seconds by default)
-- `--cpu`: the CPU emulator that runs the game's code, `unicorn` (the default) or `dynarmic`. dynarmic is about nine times faster and needs the library in `native/` ([cpu-backend.md](cpu-backend.md)). The boot log names the backend.
+- `--cpu`: the CPU emulator that runs the game's code, `dynarmic` or `unicorn`. Without the option, siicl uses dynarmic if its library in `native/` is built, and says so and uses Unicorn if it is not ([cpu-backend.md](cpu-backend.md)). The boot log names the backend.
 - `--stub-unknown`: answer each service command siicl does not implement with success and no data, and hand out an empty service for each service it does not know, instead of ending the run. The log lists every command answered this way. This shows how far a game gets and what it asks for next, but the game may then fail in other ways, so use it to explore, not as a result.
 
 ## The CPU
 
-The game's code runs in Unicorn, the CPU emulator built on QEMU (`siicl.cpu`), with its `max` CPU model. That model implements every architecture feature the scanner finds in game code: LSE atomics, LDAPR, dot product, half precision, CRC32, AES and SHA.
+The game's code runs in one of two CPU emulators, which the kernel uses through the same interface:
 
-Unicorn runs the code at EL1 with the pointer authentication keys off. PAC instructions then leave pointers unchanged, AUT instructions always succeed and RETAB returns like RET. That is the treatment the scan report asks for.
+- **dynarmic** (`siicl.dynarmic`), a JIT compiler, in siicl's fork that adds the instructions game code needs. It is the default, and runs the sample's boot about nine times faster than Unicorn. It stops at a few instructions that it still lacks; [cpu-backend.md](cpu-backend.md) lists them.
+- **Unicorn** (`siicl.cpu`), the CPU emulator built on QEMU, with its `max` CPU model. That model implements every architecture feature the scanner finds in game code: LSE atomics, LDAPR, dot product, half precision, CRC32, AES and SHA. siicl uses it when the dynarmic library isn't built, and the tests use it as the reference for dynarmic.
 
-One known error: Unicorn 2.1.4 computes `LDSMAX` and `LDSMIN` wrongly at 8, 16 and 32 bits when their operand is negative at that size, because it compares the operand as an unsigned number. The sample's code contains the 32-bit forms. [cpu-backend.md](cpu-backend.md) has the measurement.
+Both run pointer authentication as with the keys off. PAC instructions then leave pointers unchanged, AUT instructions always succeed and RETAB returns like RET. That is the treatment the scan report asks for. Unicorn runs the code at EL1 for this.
+
+One known error of Unicorn: version 2.1.4 computes `LDSMAX` and `LDSMIN` wrongly at 8, 16 and 32 bits when their operand is negative at that size, because it compares the operand as an unsigned number. The sample's code contains the 32-bit forms. [cpu-backend.md](cpu-backend.md) has the measurement.
 
 `Cpu.run()` runs until one of these stops it:
 

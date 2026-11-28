@@ -153,6 +153,20 @@ def test_boot_command_runs_on_the_cpu_backend_it_is_given(tmp_path, cpu_backend)
         assert "system counter reads turned into SVCs: 0" in text
 
 
+def test_boot_command_runs_on_dynarmic_unless_its_library_is_missing(tmp_path, capsys, monkeypatch):
+    if not dynarmic.available():
+        pytest.skip("libsiicl_dynarmic.so is not built; see native/CMakeLists.txt")
+    src = _game(tmp_path)
+    assert cli.main(["boot", str(src), "--out", str(tmp_path / "a")]) == 0
+    assert "CPU backend: dynarmic" in (tmp_path / "a" / "boot.log").read_text()
+    assert "Unicorn" not in capsys.readouterr().err
+
+    monkeypatch.setenv("SIICL_DYNARMIC", str(tmp_path / "missing.so"))
+    assert cli.main(["boot", str(src), "--out", str(tmp_path / "b")]) == 0
+    assert "CPU backend: unicorn" in (tmp_path / "b" / "boot.log").read_text()
+    assert "the dynarmic library is not built" in capsys.readouterr().err
+
+
 def test_boot_command_says_when_the_dynarmic_library_is_missing(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("SIICL_DYNARMIC", str(tmp_path / "missing.so"))
     monkeypatch.setattr(dynarmic, "_lib", None)
