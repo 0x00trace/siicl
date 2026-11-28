@@ -141,6 +141,26 @@ def _romfs_image(reader: nup.NupReader) -> romfs.RomFsImage | None:
     return romfs.RomFsImage(files) if files else None
 
 
+def _cpu_backend(choice: str | None):
+    """The CPU for a boot: dynarmic when its library is built, and Unicorn when it is not or when asked for."""
+    from siicl import cpu, dynarmic
+
+    if choice == "unicorn":
+        return cpu.Cpu()
+    if choice is None and not dynarmic.available():
+        print(
+            "siicl: the dynarmic library is not built, so the game runs on Unicorn, which is slower "
+            "(docs/cpu-backend.md says how to build it)",
+            file=sys.stderr,
+        )
+        return cpu.Cpu()
+    try:
+        return dynarmic.Cpu()
+    except dynarmic.DynarmicError as err:
+        print(f"siicl: {err}", file=sys.stderr)
+        return None
+
+
 def cmd_boot(args: argparse.Namespace) -> int:
     source = Path(args.file).expanduser()
     title_id, mods, npdm_raw = _load_exefs(source)
@@ -150,15 +170,9 @@ def cmd_boot(args: argparse.Namespace) -> int:
     label = f"{title_id:016X}" if title_id is not None else source.stem
     out_dir = paths.ensure_outside_repo(Path(args.out) if args.out else paths.cache_dir() / label)
     out_dir.mkdir(parents=True, exist_ok=True)
-    backend = None
-    if args.cpu == "dynarmic":
-        from siicl import dynarmic
-
-        try:
-            backend = dynarmic.Cpu()
-        except dynarmic.DynarmicError as err:
-            print(f"siicl: {err}", file=sys.stderr)
-            return 2
+    backend = _cpu_backend(args.cpu)
+    if backend is None:
+        return 2
     process = kernel.Process(mods, npdm.parse(npdm_raw) if npdm_raw else None, cpu=backend)
     process.stub_unknown = args.stub_unknown
     log_path = out_dir / "boot.log"
@@ -631,9 +645,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bt.add_argument(
         "--cpu",
-        choices=["unicorn", "dynarmic"],
-        default="unicorn",
-        help="the CPU emulator that runs the game's code (default unicorn; dynarmic needs the library in native/)",
+        choices=["dynarmic", "unicorn"],
+        help="the CPU emulator that runs the game's code (default: dynarmic if its library in native/ is built, "
+        "otherwise unicorn)",
     )
     bt.add_argument(
         "--stub-unknown",
