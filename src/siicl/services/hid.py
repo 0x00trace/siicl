@@ -4,6 +4,9 @@ The game reads controller state from a shared memory that `hid` hands out (throu
 and sends commands to choose which controllers and features it supports. siicl's shared memory
 stays zeroed, so the game sees no controllers connected. The memory takes the size the game maps it
 with, since the Switch 2's layout is not documented.
+
+Commands 3110 and 3150 are new on the Switch 2 and not documented. siicl knows them from what the
+SDK's client sends and reads: both return only a result.
 """
 
 from __future__ import annotations
@@ -93,3 +96,15 @@ class Hid(Service):
     SetNpadCommunicationMode = stub(1000, "SetNpadCommunicationMode")
     GetNpadCommunicationMode = stub(1001, "GetNpadCommunicationMode", None, "Q", 0)
     SetTouchScreenConfiguration = stub(1002, "SetTouchScreenConfiguration")
+    SetTouchScreenResolution = stub(1004, "SetTouchScreenResolution", "II")
+
+    @command(3110, "command 3110 (work memory)")
+    def Command3110(self, call: Call) -> int:
+        # The SDK makes a transfer memory of a work buffer that the game supplies, and sends its
+        # handle and size. The client reads only the result.
+        call.note(f"transfer memory of {call.arg('Q', 8):#x} bytes")
+        return 0
+
+    # Sent while the SDK sets the mouse up, after ActivateMouse, with the value 1. The client reads
+    # only the result.
+    Command3150 = stub(3150, "command 3150 (mouse)", "I")
