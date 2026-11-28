@@ -18,7 +18,7 @@ Never commit game files or anything taken from them. This covers dumps, extracte
 - Lint and format: `uvx ruff check` and `uvx ruff format`
 - Describe a dump: `uv run siicl info <file.nup>`
 - Scan a dump: `uv run siicl scan <file.nup>`
-- Boot a dump until it stops, and write `boot.log`: `uv run siicl boot <file.nup>`
+- Boot a dump until it stops, and write `boot.log`: `uv run siicl boot <file.nup>` (`--cpu dynarmic` runs it on dynarmic, about nine times faster)
 - Read the game data archive: `uv run siicl vzip stats|list|paths|extract|verify|grep|shaders|disasm|buffers|check-decoder <file.nup>`
 - Check the SPIR-V translation of compute programs on the GPU: `uv run siicl vzip check-gpu <file.nup>`
 - Build the dynarmic backend's C library: `git submodule update --init native/dynarmic`, then `cmake -S native -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release` and `cmake --build build/native`
@@ -29,5 +29,5 @@ Never commit game files or anything taken from them. This covers dumps, extracte
 - The scanner runs `aarch64-linux-gnu-objdump` (pacman package `aarch64-linux-gnu-binutils`). Tests also use `aarch64-linux-gnu-as` from the same package.
 - `nvdisasm` comes from the pacman package `cuda` and is in `/opt/cuda/bin`. The shader tests that need it skip when it is missing.
 - The GPU runner (`siicl.vk`) calls the system `libvulkan` through `ctypes` (pacman package `vulkan-icd-loader`). The tests that need a Vulkan GPU skip without one, and the SPIR-V tests use `spirv-val` (pacman package `spirv-tools`). `vulkan-headers`, `spirv-headers` and `vulkan-validation-layers` help when changing the runner or the translator; `vk.Gpu(validation=True)` turns the validation layer on.
-- The dynarmic backend (`siicl.dynarmic`, which `siicl boot` doesn't use yet) loads `build/native/libsiicl_dynarmic.so`, or the file `$SIICL_DYNARMIC` names, through `ctypes`. It is built from `native/` with CMake (pacman packages `cmake`, `boost` and `ninja`) and the git submodule `native/dynarmic` (siicl's fork of dynarmic 6.7.0, `github.com/0x00trace/dynarmic`, branch `siicl`, licensed 0BSD). A change to dynarmic is a commit on that branch, pushed to the fork before the commit here that moves the submodule to it. The tests that need it skip when it isn't built. See `docs/cpu-backend.md`.
+- The dynarmic backend (`siicl.dynarmic`, which `siicl boot --cpu dynarmic` uses) loads `build/native/libsiicl_dynarmic.so`, or the file `$SIICL_DYNARMIC` names, through `ctypes`. It is built from `native/` with CMake (pacman packages `cmake`, `boost` and `ninja`) and the git submodule `native/dynarmic` (siicl's fork of dynarmic 6.7.0, `github.com/0x00trace/dynarmic`, branch `siicl`, licensed 0BSD). A change to dynarmic is a commit on that branch, pushed to the fork before the commit here that moves the submodule to it. The tests that need it skip when it isn't built. See `docs/cpu-backend.md`.
 - Dumps live in `~/Games/game_dumps/switch_2`.

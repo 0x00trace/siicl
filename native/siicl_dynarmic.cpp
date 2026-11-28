@@ -100,6 +100,17 @@ struct sd_machine {
         }
     }
 
+    // True if a page of the range can be executed. dynarmic translates code only from such
+    // pages, so only a change to them can leave translated code that is out of date.
+    bool any_executable(uint64_t address, uint64_t size) const {
+        for (uint64_t page = address >> PAGE_BITS; page <= (address + size - 1) >> PAGE_BITS; page++) {
+            if (perm[page] & SD_EXECUTE) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void invalidate(uint64_t address, uint64_t size);
 };
 
@@ -369,11 +380,14 @@ int sd_map(sd_machine* m, uint64_t address, uint64_t size, uint32_t perm, void* 
     if (!m->valid_range(address, size) || !host || reinterpret_cast<uintptr_t>(host) % PAGE) {
         return -1;
     }
+    const bool code = (perm & SD_EXECUTE) || m->any_executable(address, size);
     auto* h = static_cast<uint8_t*>(host);
     for (uint64_t i = 0; i < size / PAGE; i++) {
         set_page(m, (address >> PAGE_BITS) + i, h + i * PAGE, perm);
     }
-    m->invalidate(address, size);
+    if (code) {
+        m->invalidate(address, size);
+    }
     return 0;
 }
 
@@ -381,10 +395,13 @@ int sd_protect(sd_machine* m, uint64_t address, uint64_t size, uint32_t perm) {
     if (!m->valid_range(address, size) || m->check(address, size, 0)) {
         return -1;
     }
+    const bool code = (perm & SD_EXECUTE) || m->any_executable(address, size);
     for (uint64_t page = address >> PAGE_BITS; page < (address + size) >> PAGE_BITS; page++) {
         set_page(m, page, m->host[page], perm);
     }
-    m->invalidate(address, size);
+    if (code) {
+        m->invalidate(address, size);
+    }
     return 0;
 }
 
@@ -392,10 +409,13 @@ int sd_unmap(sd_machine* m, uint64_t address, uint64_t size) {
     if (!m->valid_range(address, size)) {
         return -1;
     }
+    const bool code = m->any_executable(address, size);
     for (uint64_t page = address >> PAGE_BITS; page < (address + size) >> PAGE_BITS; page++) {
         set_page(m, page, nullptr, 0);
     }
-    m->invalidate(address, size);
+    if (code) {
+        m->invalidate(address, size);
+    }
     return 0;
 }
 
@@ -418,7 +438,9 @@ int sd_write(sd_machine* m, uint64_t address, const void* data, uint64_t size) {
         return -1;
     }
     m->copy(address, const_cast<void*>(data), size, true);
-    m->invalidate(address, size);
+    if (m->any_executable(address, size)) {
+        m->invalidate(address, size);
+    }
     return 0;
 }
 

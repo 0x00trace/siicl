@@ -1,6 +1,6 @@
 # CPU backend for real-time play
 
-siicl runs a game's AArch64 code in Unicorn ([boot.md](boot.md)). Unicorn suits milestone 1 of the [roadmap](roadmap.md): it runs every instruction the scanner finds in game code, and two runs of the same game do the same thing. It can't give the frame rate and frame pacing a game needs when someone plays it. This document records the measurements that show this, compares the backends that could replace Unicorn, and plans the change. Stages 1 and 2 of the plan are done ([Stage 1: the C library](#stage-1-the-c-library), [Stage 2: the missing instructions](#stage-2-the-missing-instructions)); `siicl boot` still runs on Unicorn.
+siicl runs a game's AArch64 code in Unicorn ([boot.md](boot.md)). Unicorn suits milestone 1 of the [roadmap](roadmap.md): it runs every instruction the scanner finds in game code, and two runs of the same game do the same thing. It can't give the frame rate and frame pacing a game needs when someone plays it. This document records the measurements that show this, compares the backends that could replace Unicorn, and plans the change. Stages 1 to 3 of the plan are done ([Stage 1: the C library](#stage-1-the-c-library), [Stage 2: the missing instructions](#stage-2-the-missing-instructions), [Stage 3: the backend for `siicl boot`](#stage-3-the-backend-for-siicl-boot)). `siicl boot --cpu dynarmic` runs a game on dynarmic; Unicorn is still the default.
 
 ## Measurements of the Unicorn backend
 
@@ -104,7 +104,7 @@ Stages 1 to 3 keep Unicorn as the default backend and leave the kernel as it is,
 |---|---|---|
 | 1. Build and C library | Done. dynarmic 6.7.0 is the git submodule `native/dynarmic`, unchanged, from `github.com/lioncash/dynarmic`; the fork is made in stage 2, with the first change to dynarmic. `native/siicl_dynarmic.cpp` is the C library: create a machine and its cores, map pages, read and write registers, run for a number of ticks, and report why a run stopped. `siicl.dynarmic` loads it with `ctypes`, as siicl loads liblz4 and libvulkan. | `tests/test_dynarmic.py` runs synthetic programs on dynarmic from Python. |
 | 2. Missing instructions | Done. The fork, `github.com/0x00trace/dynarmic` (branch `siicl`), adds `LDAPR`, the pointer authentication forms, the LSE atomics and `CNTVCT_EL0`, and the submodule points at it. `tests/test_cpu_compare.py` assembles synthetic programs with `aarch64-linux-gnu-as`, runs each on Unicorn and on dynarmic, and compares the registers, the flags and the memory. | The instruction groups of the scan report run on dynarmic and give the same results as on Unicorn, except where Unicorn is wrong (see below). Three groups that no boot has needed yet are still missing. |
-| 3. A backend for `siicl boot` | A dynarmic implementation of `siicl.cpu.Cpu`: `run`, `map_host`, `read`, `write`, the registers and the saved contexts. An option of `siicl boot` chooses the backend. Counter reads go through `GetCNTPCT` instead of patched SVCs. | The sample boots on dynarmic to the same point as on Unicorn, the two boot logs agree thread by thread, and the speed is measured. |
+| 3. A backend for `siicl boot` | Done. `siicl.dynarmic.Cpu` has the interface of `siicl.cpu.Cpu`: `run`, `map_host`, `read`, `write`, the registers and the saved contexts. `siicl boot --cpu dynarmic` chooses it. Counter reads go through `GetCNTPCT` instead of patched SVCs. | The sample boots on dynarmic to the same point as on Unicorn, 9.4 times faster inside the CPU. The two boot logs agree in 1,164 of 1,174 thread events. |
 | 4. Parallel cores and real time | One host thread for each guest core, with the shared exclusive monitor, and a scheduler for each core. A real-time mode that uses the host clock, beside the repeatable mode. The language of the kernel and the services is chosen here, from the number of SVCs a frame makes after milestone 1 and the costs measured above. | The sample runs with its threads on several host threads, and two runs in the repeatable mode still give the same boot log. |
 
 The dynarmic fork and the C library become runtime dependencies besides Unicorn. The environment section of `CLAUDE.md` is updated when they are added.
@@ -133,7 +133,7 @@ What stage 1 found:
 - **A core counts instructions or accepts halt requests, not both.** Between linked blocks, dynarmic checks either the budget or a halt request. A core created with `count_ticks` (the repeatable mode) stops only at its budget; a core created without it (real-time play) runs until another thread calls `Core.halt()`.
 - **Counts at exceptions and faults are approximate.** A run that ends at an exception is charged its whole block, and a run that ends at a data fault is charged nothing.
 - **Exclusive stores work across cores.** Two cores on two host threads each added 1 to the same word 200,000 times with `LDXR` and `STXR`, and the word ended at 400,000.
-- **Read-only pages cost a call per access.** Leaving them out of dynarmic's page table keeps the permissions correct, but every access to code and read-only data goes through a callback. Stage 3 measures what this costs on a boot. dynarmic's `fastmem_pointer`, with read-only pages protected in host memory, is the faster alternative.
+- **Read-only pages cost a call per access.** Leaving them out of dynarmic's page table keeps the permissions correct, but every access to code and read-only data goes through a callback. The boot in stage 3 runs at 1.8 billion instructions per second with this cost included. dynarmic's `fastmem_pointer`, with read-only pages protected in host memory, is the faster alternative.
 
 ## Stage 2: the missing instructions
 
@@ -160,9 +160,35 @@ What the tests show:
 - **Faults.** An atomic instruction on unmapped or read-only memory stops the run at the instruction with its registers unchanged, and doesn't run again.
 - **Unicorn computes `LDSMAX` and `LDSMIN` wrongly at 8, 16 and 32 bits.** Unicorn 2.1.4 compares their operand as an unsigned number, so the result is wrong whenever the operand is negative at the size of the access: with 0 in memory and an operand of -1, `LDSMAX` stores -1. The 64-bit forms and the unsigned forms are right. dynarmic gives the architecture's result in every case that `test_atomic_min_and_max_follow_the_architecture` checks, so for these forms the tests compare dynarmic with the architecture's definition and not with Unicorn. The sample's code contains the 32-bit forms, so a boot on Unicorn can compute a wrong value there ([boot.md](boot.md)). `test_unicorn_signed_atomic_min_and_max` is expected to fail, and passes once a Unicorn release fixes this.
 
+## Stage 3: the backend for `siicl boot`
+
+`siicl.dynarmic.Cpu` is one dynarmic core with the interface of `siicl.cpu.Cpu`, and `kernel.Process` takes either as its `cpu`. Two things differ for the kernel:
+
+- **Counter reads.** dynarmic answers reads of the system counter itself, so the loader changes no instructions. The kernel sets the CPU's counter to its virtual time before each turn and reads it back afterwards. A read still advances time by one tick, but it no longer costs the microsecond of an SVC.
+- **Turns.** A turn ends at the end of a block of translated code, so it can run a few instructions more than 200,000.
+
+Measured on 2026-11-27 on a Ryzen 9 9900X, on the boot of the sample, which ends at the same unimplemented service command on both backends:
+
+| | Unicorn | dynarmic |
+|---|---|---|
+| The whole `siicl boot` command | 26.7 s | 3.4 s |
+| Time inside the CPU | 25.1 s | 2.67 s |
+| Guest instructions per second | about 195 million | 1,832 million |
+
+dynarmic ran 4.89 billion guest instructions on one host thread. The 0.75 s outside the CPU is mostly reading and decompressing the game's modules; the kernel and the services take about 0.1 s.
+
+- **Repeatable.** Three boots on dynarmic wrote the same boot log, byte for byte.
+- **Agreement with Unicorn.** Compared thread by thread, 1,164 of 1,174 events in the two boot logs are the same. The ten that differ are timeouts that the game computes from the clock, and one mutex that two threads take in a different order. Both follow from turns that end at different instructions and from the cheaper counter reads.
+- **Both backends in the tests.** The kernel, boot and service tests (`tests/test_kernel.py`, `test_boot.py`, `test_services.py`, `test_nv.py`) run on both backends, through the `cpu_backend` fixture.
+- **Read-only pages and atomics.** The rate above includes the callback for every access to code and read-only data, and the exclusive monitor's lock for every atomic. Neither needs to change before stage 4.
+- **Writes by the kernel.** A write to guest memory asks dynarmic to translate code again only if the page can be executed. Other writes can't change translated code, and each such request resets dynarmic's prediction of return addresses.
+
+Unicorn stays the default backend for now: dynarmic needs the library in `native/` to be built, and it stops at the instructions listed above as still missing.
+
 ## Open questions
 
 - Whether the fork should give dynarmic a way to end a slice at an exact instruction count, such as a limit on block length, so that boot logs from the two backends can be compared line by line.
-- Whether the atomics should use `LOCK`-prefixed host instructions instead of the exclusive monitor. Stage 3 measures the boot before deciding.
+- Whether the atomics should use `LOCK`-prefixed host instructions instead of the exclusive monitor. One core runs the boot at 1.8 billion instructions per second with the monitor, so this waits for stage 4, where several cores share the monitor's lock.
+- Whether dynarmic should become the default backend of `siicl boot`, with Unicorn as the reference for tests.
 - What a game sees when it accesses the performance monitor registers on the console.
 - What to do about Unicorn's `LDSMAX` and `LDSMIN` while `siicl boot` still runs on Unicorn: the loader could change them into SVCs that siicl computes, as it does for counter reads.

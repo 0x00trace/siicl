@@ -5,6 +5,7 @@
 Options:
 
 - `--seconds`: how much guest time the run may use (60 seconds by default)
+- `--cpu`: the CPU emulator that runs the game's code, `unicorn` (the default) or `dynarmic`. dynarmic is about nine times faster and needs the library in `native/` ([cpu-backend.md](cpu-backend.md)). The boot log names the backend.
 - `--stub-unknown`: answer each service command siicl does not implement with success and no data, and hand out an empty service for each service it does not know, instead of ending the run. The log lists every command answered this way. This shows how far a game gets and what it asks for next, but the game may then fail in other ways, so use it to explore, not as a result.
 
 ## The CPU
@@ -55,7 +56,7 @@ The modules are the NSO files in the exefs (`siicl.loader`). They go one after a
 
 The loader does not relocate anything. rtld, the first module, runs first and relocates itself and the other modules.
 
-The loader changes one kind of instruction. Each read of the system counter (`MRS Xt, CNTPCT_EL0` or `CNTVCT_EL0`) becomes `SVC #(0xF000 + t)`, which siicl answers with its virtual time (see below). Real SVC numbers are below 0x100, so these never collide with them.
+For Unicorn, the loader changes one kind of instruction. Each read of the system counter (`MRS Xt, CNTPCT_EL0` or `CNTVCT_EL0`) becomes `SVC #(0xF000 + t)`, which siicl answers with its virtual time (see below). Real SVC numbers are below 0x100, so these never collide with them. dynarmic answers counter reads itself with the same virtual time, so for it the loader changes nothing.
 
 ## The main thread
 
@@ -70,13 +71,13 @@ Handles have the kernel's format: the slot index in the low 15 bits and a serial
 
 ## Threads and time
 
-Threads take turns on the one CPU. The scheduler keeps a run queue for each core the NPDM allows, and gives the cores turns in a fixed order. On its turn, a core runs its highest-priority runnable thread until the thread makes an SVC or has run 200,000 instructions. Threads of equal priority on one core also take turns. Nothing depends on the host's timing, so two runs of the same game do the same thing and write the same log.
+Threads take turns on the one CPU. The scheduler keeps a run queue for each core the NPDM allows, and gives the cores turns in a fixed order. On its turn, a core runs its highest-priority runnable thread until the thread makes an SVC or has run 200,000 instructions (on dynarmic, until the end of the block of translated code in which it reaches 200,000). Threads of equal priority on one core also take turns. Nothing depends on the host's timing, so two runs of the same game do the same thing and write the same log.
 
 Time is virtual. The system counter runs at 19.2 MHz, as on the console. It advances:
 
 - by one nanosecond for each instruction of a full 200,000-instruction turn
 - by one microsecond for each SVC
-- by one tick for each read of the counter, so two reads never return the same value
+- by one tick for each read of the counter, so two reads never return the same value (on Unicorn a read is also an SVC, so it costs the microsecond too)
 - to the next timeout, when every thread is waiting
 
 A thread that is switched out between an exclusive load and its exclusive store keeps its exclusive monitor, which the console's kernel would clear. Games rarely use exclusive loads and stores (the LSE atomics replace them), so siicl does not handle this yet.
@@ -230,7 +231,7 @@ The log has these parts, in this order:
 
 1. The modules, with their address ranges and module IDs.
 2. The memory map: each mapped range with its permissions, memory state and what it holds.
-3. The main thread: handle, entry point, stack top, thread-local storage, priority and core. Then how many counter reads the loader changed.
+3. The main thread: handle, entry point, stack top, thread-local storage, priority and core. Then the CPU backend, and how many counter reads the loader changed for it.
 4. One line for each SVC: the guest time in seconds, the thread number, the SVC with its arguments, and its result. For example:
    - `0.066837 t0  GetInfo(HeapRegionAddress, handle=0xffff8001, sub=0x0) -> ok, 0x2000000000`
    - `0.000001 t0  QueryMemory(address=0x0) -> ok: 0x0+0x8000000 free ---`

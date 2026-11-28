@@ -14,7 +14,10 @@ from siicl import npdm as npdm_mod
 from siicl.addrspace import LAYOUT_39BIT, MemoryAttribute, MemoryState
 from tests.builders import AS, assemble, build_npdm, build_nso
 
-pytestmark = pytest.mark.skipif(not AS, reason="aarch64-linux-gnu-binutils is not installed")
+pytestmark = [
+    pytest.mark.skipif(not AS, reason="aarch64-linux-gnu-binutils is not installed"),
+    pytest.mark.usefixtures("cpu_backend"),  # each test runs on Unicorn and on dynarmic
+]
 
 HEAP = LAYOUT_39BIT.heap.start
 ALL_SVCS = range(0x01, 0x81)
@@ -469,7 +472,8 @@ def test_sleep_and_the_counter_move_virtual_time(tmp_path):
         svc #0x07
         """,
     )
-    assert p.counter_reads == 3
+    # Unicorn has the loader turn the three reads into SVCs; dynarmic answers them itself.
+    assert p.counter_reads == (0 if p.cpu.native_counter else 3)
     assert p.cpu.x(20) - p.cpu.x(19) >= kernel.ns_to_ticks(1_000_000)
     assert p.cpu.x(19) < p.cpu.x(20) < p.cpu.x(21) < p.cpu.x(22)
 
